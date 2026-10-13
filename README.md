@@ -11,7 +11,9 @@
 ## Первичное развёртывание на Linux-сервере
 
 ```bash
-cd /opt
+cd ~
+mkdir -p apps
+cd apps
 git clone https://github.com/vadfe/trade_exp_12.git
 cd trade_exp_12
 python3 -m venv .venv
@@ -29,7 +31,7 @@ python -m uvicorn trade_exp_12.main:app --host 0.0.0.0 --port 8031
 ## Обновление сервера после коммита
 
 ```bash
-cd /opt/trade_exp_12
+cd ~/apps/trade_exp_12
 git pull --ff-only
 source .venv/bin/activate
 python -m pip install -r requirements-dev.txt
