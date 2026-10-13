@@ -35,12 +35,16 @@ def test_health_and_dashboard(tmp_path) -> None:
     with TestClient(create_app(config)) as client:
         health = client.get("/health")
         dashboard = client.get("/")
+        plotly_javascript = client.get("/vendor/plotly.min.js")
 
     assert health.status_code == 200
     assert health.json()["status"] == "ok"
     assert dashboard.status_code == 200
     assert "ADAUSDT" in dashboard.text
     assert "Загрузить" in dashboard.text
+    assert plotly_javascript.status_code == 200
+    assert "Plotly" in plotly_javascript.text[:1000]
+    assert "max-age=31536000" in plotly_javascript.headers["cache-control"]
 
 
 def test_quality_page_uses_stored_dataset(tmp_path) -> None:

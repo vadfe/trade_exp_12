@@ -4,8 +4,9 @@ import asyncio
 from datetime import datetime
 from pathlib import Path
 
+import plotly
 from fastapi import APIRouter, Form, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from trade_exp_12.data.aggregate import aggregate_candles, aggregate_features
@@ -13,10 +14,20 @@ from trade_exp_12.reversals.zigzag import detect_atr_reversals, reversals_as_dic
 
 router = APIRouter()
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
+PLOTLY_JS = Path(plotly.__file__).parent / "package_data" / "plotly.min.js"
 
 
 def context(request: Request, **values: object) -> dict[str, object]:
     return {"request": request, "config": request.app.state.config.settings, **values}
+
+
+@router.get("/vendor/plotly.min.js", include_in_schema=False)
+def plotly_javascript():
+    return FileResponse(
+        PLOTLY_JS,
+        media_type="text/javascript",
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
 
 
 @router.get("/")
