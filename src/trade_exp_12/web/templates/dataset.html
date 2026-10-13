@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}{{ symbol }} · {{ timeframe }}m{% endblock %}
+{% block head %}<script src="https://cdn.plot.ly/plotly-3.1.0.min.js"></script>{% endblock %}
+{% block content %}
+<section class="hero">
+  <div>
+    <span class="eyebrow">Spot · {{ timeframe }} минут</span>
+    <h1>{{ symbol }}</h1>
+    <p>{{ record['first_open_time'][:10] }} — {{ record['last_open_time'][:10] }}</p>
+  </div>
+  <div class="metric"><b>{{ "{:,}".format(record['row_count']) }}</b><span>свечей · {{ record['gap_count'] }} gaps</span></div>
+</section>
+<section class="panel chart-panel">
+  <div class="chart-toolbar">
+    <span id="chart-status">Загрузка обзора…</span>
+    <button id="reset-chart" class="secondary" type="button">Весь период</button>
+  </div>
+  <div id="chart"></div>
+</section>
+<section class="panel">
+  <div class="section-title">
+    <div>
+      <h2>Управление данными</h2>
+      {% if processed %}<p class="good">Processed {{ processed['feature_set'] }} · {{ processed['row_count'] }} строк · source {{ processed['source_version'] }}</p>{% else %}<p class="warn">Processed dataset ещё не создан.</p>{% endif %}
+    </div>
+    <div>
+      <a class="button secondary" href="/quality/{{ symbol }}/{{ timeframe }}">Качество</a>
+      {% if processed %}<a class="button secondary" href="/features/{{ symbol }}/{{ timeframe }}">Признаки</a> <a class="button secondary" href="/reversals/{{ symbol }}/{{ timeframe }}">Развороты</a>{% endif %}
+      <form class="inline" method="post" action="/data/process">
+        <input type="hidden" name="symbol" value="{{ symbol }}">
+        <input type="hidden" name="timeframe" value="{{ timeframe }}">
+        <button>{{ 'Пересчитать признаки' if processed else 'Подготовить признаки' }}</button>
+      </form>
+      <form class="inline" method="post" action="/data/download">
+        <input type="hidden" name="symbol" value="{{ symbol }}">
+        <input type="hidden" name="timeframe" value="{{ timeframe }}">
+        <button>Обновить данные</button>
+      </form>
+    </div>
+  </div>
+</section>
+<script>
+const endpoint = '/api/data/{{ symbol }}/{{ timeframe }}/candles';
+const chart = document.getElementById('chart');
+const status = document.getElementById('chart-status');
+let requestNumber = 0;
+let zoomTimer;
+
+function traces(data) {
+  return [
+    {x:data.time,open:data.open,high:data.high,low:data.low,close:data.close,type:'candlestick',name:'OHLC'},
+    {x:data.time,y:data.volume,type:'bar',name:'Volume',yaxis:'y2',marker:{color:'#39566f'}}
+  ];
+}
+
+const layout = {
+  paper_bgcolor:'#10171d',plot_bgcolor:'#10171d',font:{color:'#aebdca'},
+  xaxis:{rangeslider:{visible:false},gridcolor:'#23313c'},
+  yaxis:{domain:[.27,1],gridcolor:'#23313c'},yaxis2:{domain:[0,.2],gridcolor:'#23313c'},
+  margin:{l:55,r:20,t:20,b:40},showlegend:false,uirevision:'market-chart'
+};
+
+async function loadRange(start, end) {
+  const currentRequest = ++requestNumber;
+  const params = new URLSearchParams({max_points:'2000'});
+  if (start) params.set('start', new Date(start).toISOString());
+  if (end) params.set('end', new Date(end).toISOString());
+  status.textContent = 'Загрузка диапазона…';
+  const response = await fetch(`${endpoint}?${params}`);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const data = await response.json();
+  if (currentRequest !== requestNumber) return;
+  await Plotly.react(chart, traces(data), layout, {responsive:true,displaylogo:false});
+  const aggregation = data.group_size > 1 ? `, объединение по ${data.group_size} свечей` : ', исходные свечи';
+  status.textContent = `${data.point_count.toLocaleString()} точек из ${data.source_count.toLocaleString()} свечей${aggregation}`;
+}
+
+Plotly.newPlot(chart, [], layout, {responsive:true,displaylogo:false}).then(() => {
+  chart.on('plotly_relayout', event => {
+    clearTimeout(zoomTimer);
+    if (event['xaxis.autorange']) {
+      zoomTimer = setTimeout(() => loadRange(), 200);
+      return;
+    }
+    const start = event['xaxis.range[0]'];
+    const end = event['xaxis.range[1]'];
+    if (start && end) zoomTimer = setTimeout(() => loadRange(start, end), 250);
+  });
+  loadRange().catch(error => { status.textContent = `Ошибка загрузки: ${error.message}`; });
+});
+
+document.getElementById('reset-chart').addEventListener('click', () => loadRange());
+</script>
+{% endblock %}

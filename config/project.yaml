@@ -1,0 +1,30 @@
+app:
+  host: 127.0.0.1
+  port: 8031
+
+bybit:
+  base_url: https://api.bybit.com
+  category: spot
+  page_limit: 1000
+  request_delay_seconds: 0.08
+  timeout_seconds: 20
+  max_retries: 5
+
+universe:
+  symbols:
+    - BRETTUSDT
+    - IMXUSDT
+    - NEARUSDT
+    - OPUSDT
+    - ARBUSDT
+    - ADAUSDT
+    - PEPEUSDT
+  timeframes:
+    - "15"
+    - "60"
+  history_years: 4
+
+storage:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  registry_path: data/registry/trade_exp_12.db

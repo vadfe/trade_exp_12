@@ -1,0 +1,1 @@
+{% extends "base.html" %}{% block title %}Конфигурация{% endblock %}{% block content %}<section class="hero"><div><span class="eyebrow">Project</span><h1>Конфигурация</h1><p>Эффективные настройки из config/project.yaml.</p></div></section><section class="panel"><pre>{{ rendered | tojson(indent=2) }}</pre></section>{% endblock %}

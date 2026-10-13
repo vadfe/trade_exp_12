@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Признаки {{ symbol }} · {{ timeframe }}m{% endblock %}
+{% block head %}<script src="https://cdn.plot.ly/plotly-3.1.0.min.js"></script>{% endblock %}
+{% block content %}
+<section class="hero"><div><span class="eyebrow">Processed {{ record['feature_set'] }} · {{ timeframe }} минут</span><h1>Признаки {{ symbol }}</h1><p>Все значения рассчитаны только из информации, доступной к закрытию соответствующей свечи.</p></div><a class="button secondary" href="/data/{{ symbol }}/{{ timeframe }}">К свечам</a></section>
+<section class="feature-cards">
+  <article><b>Log return</b><span>Относительное изменение close. Показывает направление и величину движения без зависимости от абсолютной цены.</span></article>
+  <article><b>Body / ATR</b><span>Тело свечи в единицах текущей волатильности. Сравнивает силу свечей между разными режимами.</span></article>
+  <article><b>Wicks / ATR</b><span>Верхняя и нижняя тени относительно ATR. Отражают отторжение цены и внутрисвечной дисбаланс.</span></article>
+  <article><b>Range / ATR</b><span>Полный диапазон свечи относительно нормальной волатильности. Выделяет импульсы и сжатия.</span></article>
+  <article><b>Relative volume</b><span>Объём относительно медианы предыдущих 20 свечей. Значение 2 означает объём примерно вдвое выше обычного.</span></article>
+  <article><b>ATR %</b><span>ATR как процент цены. Показывает режим рыночной волатильности.</span></article>
+</section>
+<section class="panel chart-panel"><div class="chart-toolbar"><span id="feature-status">Загрузка признаков…</span><button id="reset-features" class="secondary" type="button">Весь период</button></div><div id="feature-chart"></div></section>
+<script>
+const endpoint='/api/features/{{ symbol }}/{{ timeframe }}';
+const chart=document.getElementById('feature-chart');
+const status=document.getElementById('feature-status');
+let requestNumber=0, zoomTimer;
+const layout={paper_bgcolor:'#10171d',plot_bgcolor:'#10171d',font:{color:'#aebdca'},xaxis:{gridcolor:'#23313c'},yaxis:{domain:[.78,1],title:'Return',gridcolor:'#23313c'},yaxis2:{domain:[.52,.73],title:'Свеча / ATR',gridcolor:'#23313c'},yaxis3:{domain:[.26,.47],title:'Volume',gridcolor:'#23313c'},yaxis4:{domain:[0,.21],title:'ATR %',gridcolor:'#23313c'},margin:{l:70,r:20,t:35,b:40},legend:{orientation:'h'},uirevision:'features'};
+function traces(d){return [
+{x:d.time,y:d.log_return,type:'scattergl',name:'Log return',line:{color:'#55c2a3'},yaxis:'y'},
+{x:d.time,y:d.body_atr,type:'scattergl',name:'Body / ATR',line:{color:'#f0b35a'},yaxis:'y2'},
+{x:d.time,y:d.upper_wick_atr,type:'scattergl',name:'Upper wick / ATR',line:{color:'#ef6b73'},yaxis:'y2'},
+{x:d.time,y:d.lower_wick_atr,type:'scattergl',name:'Lower wick / ATR',line:{color:'#729ee8'},yaxis:'y2'},
+{x:d.time,y:d.range_atr,type:'scattergl',name:'Range / ATR',line:{color:'#c17ce0'},yaxis:'y2'},
+{x:d.time,y:d.relative_volume,type:'bar',name:'Relative volume',marker:{color:'#39566f'},yaxis:'y3'},
+{x:d.time,y:d.atr_percent,type:'scattergl',name:'ATR %',line:{color:'#d9ca63'},yaxis:'y4'}];}
+async function loadRange(start,end){const id=++requestNumber;const p=new URLSearchParams({max_points:'2000'});if(start)p.set('start',new Date(start).toISOString());if(end)p.set('end',new Date(end).toISOString());status.textContent='Загрузка признаков…';const r=await fetch(`${endpoint}?${p}`);if(!r.ok)throw new Error(`HTTP ${r.status}`);const d=await r.json();if(id!==requestNumber)return;await Plotly.react(chart,traces(d),layout,{responsive:true,displaylogo:false});status.textContent=`${d.point_count.toLocaleString()} точек из ${d.source_count.toLocaleString()} строк · агрегация ${d.group_size}:1`;}
+Plotly.newPlot(chart,[],layout,{responsive:true,displaylogo:false}).then(()=>{chart.on('plotly_relayout',e=>{clearTimeout(zoomTimer);if(e['xaxis.autorange'])zoomTimer=setTimeout(()=>loadRange(),200);else if(e['xaxis.range[0]']&&e['xaxis.range[1]'])zoomTimer=setTimeout(()=>loadRange(e['xaxis.range[0]'],e['xaxis.range[1]']),250);});loadRange().catch(e=>status.textContent=`Ошибка: ${e.message}`);});
+document.getElementById('reset-features').addEventListener('click',()=>loadRange());
+</script>
+{% endblock %}
