@@ -25,7 +25,7 @@
     </div>
     <div>
       <a class="button secondary" href="/quality/{{ symbol }}/{{ timeframe }}">Качество</a>
-      {% if processed %}<a class="button secondary" href="/features/{{ symbol }}/{{ timeframe }}">Признаки</a> <a class="button secondary" href="/reversals/{{ symbol }}/{{ timeframe }}">Развороты</a>{% endif %}
+      {% if processed %}<a class="button secondary" href="/features/{{ symbol }}/{{ timeframe }}">Признаки</a> <a class="button secondary" href="/smc/{{ symbol }}/{{ timeframe }}">SMC</a> <a class="button secondary" href="/reversals/{{ symbol }}/{{ timeframe }}">Развороты</a>{% endif %}
       <form class="inline" method="post" action="/data/process">
         <input type="hidden" name="symbol" value="{{ symbol }}">
         <input type="hidden" name="timeframe" value="{{ timeframe }}">

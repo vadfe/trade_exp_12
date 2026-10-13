@@ -231,6 +231,81 @@ def reversals(request: Request, symbol: str, timeframe: str):
     )
 
 
+@router.get("/api/smc/{symbol}/{timeframe}")
+def smc_data(
+    request: Request,
+    symbol: str,
+    timeframe: str,
+    swing_length: int = 20,
+    liquidity_range: float = 0.01,
+    start: datetime | None = None,
+    end: datetime | None = None,
+):
+    loaded = request.app.state.data_service.smc_analysis(
+        symbol,
+        timeframe,
+        max(2, min(swing_length, 100)),
+        max(0.001, min(liquidity_range, 0.1)),
+    )
+    if loaded is None:
+        raise HTTPException(status_code=404, detail="Processed dataset not found")
+    _, analysis = loaded
+    frame = analysis.features
+    effective_start = start or frame.iloc[max(0, len(frame) - 500)]["open_time"].to_pydatetime()
+    effective_end = end or frame.iloc[-1]["open_time"].to_pydatetime()
+
+    def event_time(event: dict[str, object], key: str) -> datetime:
+        return datetime.fromisoformat(str(event[key]))
+
+    def points(events: list[dict[str, object]], key: str, limit: int) -> list[dict[str, object]]:
+        visible = [
+            event
+            for event in events
+            if effective_start <= event_time(event, key) <= effective_end
+        ]
+        return visible[-limit:]
+
+    def zones(events: list[dict[str, object]], limit: int) -> list[dict[str, object]]:
+        visible = [
+            event
+            for event in events
+            if event_time(event, "end_time") >= effective_start
+            and event_time(event, "known_at") <= effective_end
+        ]
+        return visible[-limit:]
+
+    return {
+        "start": effective_start.isoformat(),
+        "end": effective_end.isoformat(),
+        "swing_length": swing_length,
+        "liquidity_range": liquidity_range,
+        "swings": points(analysis.swings, "pivot_time", 80),
+        "structure": points(analysis.structure, "known_at", 80),
+        "fair_value_gaps": zones(analysis.fair_value_gaps, 100),
+        "order_blocks": zones(analysis.order_blocks, 50),
+        "liquidity": zones(analysis.liquidity, 50),
+        "totals": {
+            "swings": len(analysis.swings),
+            "structure": len(analysis.structure),
+            "fair_value_gaps": len(analysis.fair_value_gaps),
+            "order_blocks": len(analysis.order_blocks),
+            "liquidity": len(analysis.liquidity),
+        },
+    }
+
+
+@router.get("/smc/{symbol}/{timeframe}")
+def smc_page(request: Request, symbol: str, timeframe: str):
+    record = request.app.state.registry.latest_processed(symbol, timeframe)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Processed dataset not found")
+    return templates.TemplateResponse(
+        request,
+        "smc.html",
+        context(request, record=record, symbol=symbol, timeframe=timeframe),
+    )
+
+
 @router.get("/quality/{symbol}/{timeframe}")
 def quality(request: Request, symbol: str, timeframe: str, limit: int = 2000):
     loaded = request.app.state.data_service.quality(symbol, timeframe)

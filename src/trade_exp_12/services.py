@@ -10,11 +10,12 @@ from trade_exp_12.data.bybit import BybitClient, interval_milliseconds
 from trade_exp_12.data.quality import inspect_candles
 from trade_exp_12.data.storage import ParquetStorage
 from trade_exp_12.features.relative import add_relative_features
+from trade_exp_12.market_structure.smc_layer import SMCAnalysis, analyze_smc
 from trade_exp_12.registry import Registry
 
 
 class DataService:
-    FEATURE_SET = "relative_v1"
+    FEATURE_SET = "relative_smc_v2"
 
     def __init__(
         self,
@@ -28,6 +29,7 @@ class DataService:
         self.storage = storage
         self.processed_storage = processed_storage
         self._frame_cache: dict[str, pd.DataFrame] = {}
+        self._smc_cache: dict[tuple[str, int, float], SMCAnalysis] = {}
 
     async def download(self, job_id: int, symbol: str, timeframe: str) -> None:
         try:
@@ -88,8 +90,10 @@ class DataService:
             if loaded is None:
                 raise ValueError("Raw dataset not found")
             source, frame = loaded
-            self.registry.update_job(job_id, "running", 0.4, "Calculating relative features")
+            self.registry.update_job(job_id, "running", 0.3, "Calculating relative features")
             processed = add_relative_features(frame)
+            self.registry.update_job(job_id, "running", 0.6, "Calculating SMC structures")
+            processed = analyze_smc(processed).features
             report = inspect_candles(frame, timeframe)
             record = self.processed_storage.save(
                 processed,
@@ -145,6 +149,22 @@ class DataService:
         if record is None:
             return None
         return record, self._read_path(record["path"])
+
+    def smc_analysis(
+        self,
+        symbol: str,
+        timeframe: str,
+        swing_length: int = 20,
+        liquidity_range: float = 0.01,
+    ) -> tuple[object, SMCAnalysis] | None:
+        loaded = self.read_latest_processed(symbol, timeframe)
+        if loaded is None:
+            return None
+        record, frame = loaded
+        key = (record["path"], swing_length, liquidity_range)
+        if key not in self._smc_cache:
+            self._smc_cache[key] = analyze_smc(frame, swing_length, liquidity_range)
+        return record, self._smc_cache[key]
 
     def quality(self, symbol: str, timeframe: str):
         loaded = self.read_latest(symbol, timeframe)

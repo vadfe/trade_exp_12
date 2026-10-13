@@ -63,6 +63,7 @@ def test_quality_page_uses_stored_dataset(tmp_path) -> None:
     with TestClient(app) as client:
         report = inspect_candles(frame, "15")
         record = app.state.storage.save(frame, "spot", "ADAUSDT", "15", report)
+        assert "\\" not in record.path
         app.state.registry.add_dataset(record)
         response = client.get("/quality/ADAUSDT/15")
         dataset_response = client.get("/data/ADAUSDT/15")

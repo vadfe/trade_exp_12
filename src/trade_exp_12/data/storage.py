@@ -52,7 +52,7 @@ class ParquetStorage:
             symbol=symbol,
             timeframe=timeframe,
             version=version,
-            path=str(record_path),
+            path=record_path.as_posix(),
             first_open_time=frame.iloc[0]["open_time"].isoformat(),
             last_open_time=frame.iloc[-1]["open_time"].isoformat(),
             row_count=len(frame),

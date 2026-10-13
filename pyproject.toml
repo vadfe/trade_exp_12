@@ -17,6 +17,7 @@ dependencies = [
     "pandas>=2.3,<3",
     "pyarrow>=20,<24",
     "python-multipart>=0.0.20,<1",
+    "smartmoneyconcepts==0.0.27",
 ]
 
 [project.optional-dependencies]

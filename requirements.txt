@@ -7,3 +7,4 @@ PyYAML==6.0.3
 pandas==2.3.3
 pyarrow==23.0.1
 python-multipart==0.0.32
+smartmoneyconcepts==0.0.27
