@@ -123,7 +123,7 @@ def candle_data(
     if end is not None:
         selected = selected[selected["open_time"] <= end]
     selected = selected.reset_index(drop=True)
-    chart, group_size = aggregate_candles(selected, max(100, min(max_points, 5000)))
+    chart, group_size = aggregate_candles(selected, max(100, min(max_points, 200_000)))
     return {
         "source_count": len(selected),
         "point_count": len(chart),
