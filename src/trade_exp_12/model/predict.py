@@ -211,6 +211,14 @@ def compute_signals(predictions: pd.DataFrame) -> dict:
 
 
 def _ts(val) -> str:
+    """Convert timestamp to ISO string with UTC timezone suffix."""
     if hasattr(val, "isoformat"):
-        return val.isoformat()
-    return str(val)
+        s = val.isoformat()
+        # Ensure UTC suffix so it matches candles API format
+        if "+" not in s and "Z" not in s:
+            s += "+00:00"
+        return s
+    s = str(val)
+    if "+" not in s and "Z" not in s:
+        s = s.replace(" ", "T") + "+00:00"
+    return s
