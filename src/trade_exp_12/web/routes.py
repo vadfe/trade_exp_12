@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from trade_exp_12.data.aggregate import aggregate_candles, aggregate_features
+from trade_exp_12.model.experiment import list_experiments, run_experiment
 from trade_exp_12.reversals.zigzag import detect_atr_reversals, reversals_as_dicts
 
 router = APIRouter()
@@ -345,5 +347,125 @@ def quality(request: Request, symbol: str, timeframe: str, limit: int = 2000):
             timeframe=timeframe,
             chart=chart,
             feature_rows=feature_rows,
+        ),
+    )
+
+
+# --- Experiment routes ---
+
+
+def _experiment_dir(request: Request) -> Path:
+    return request.app.state.config.root / "data" / "experiments"
+
+
+@router.get("/experiments")
+def experiments_page(request: Request):
+    exp_dir = _experiment_dir(request)
+    experiments = list_experiments(exp_dir)
+    return templates.TemplateResponse(
+        request,
+        "experiments.html",
+        context(request, experiments=experiments),
+    )
+
+
+@router.post("/experiment/run")
+async def start_experiment(
+    request: Request,
+    symbol: str = Form(...),
+    timeframe: str = Form(...),
+    window_size: int = Form(64),
+    atr_multiplier: float = Form(3.0),
+    epochs: int = Form(30),
+    d_model: int = Form(64),
+    n_layers: int = Form(4),
+    lr: float = Form(0.001),
+):
+    loaded = request.app.state.data_service.read_latest_processed(symbol, timeframe)
+    if loaded is None:
+        raise HTTPException(status_code=404, detail="Processed dataset not found")
+    _, frame = loaded
+
+    registry = request.app.state.registry
+    job_id = registry.create_job("experiment", symbol, timeframe)
+    exp_dir = _experiment_dir(request)
+
+    async def _run():
+        try:
+            registry.update_job(job_id, "running", 0.1, "Preparing dataset")
+
+            def progress(epoch, total, metrics):
+                pct = 0.1 + 0.85 * (epoch / total)
+                registry.update_job(
+                    job_id,
+                    "running",
+                    pct,
+                    f"Epoch {epoch}/{total} — "
+                    f"val_acc={metrics['val_accuracy']:.3f}",
+                )
+
+            result = run_experiment(
+                frame,
+                symbol,
+                timeframe,
+                exp_dir,
+                window_size=max(16, min(window_size, 256)),
+                atr_multiplier=max(0.5, min(atr_multiplier, 20.0)),
+                epochs=max(1, min(epochs, 200)),
+                d_model=max(16, min(d_model, 512)),
+                n_layers=max(1, min(n_layers, 12)),
+                lr=max(1e-5, min(lr, 0.1)),
+            )
+            registry.update_job(
+                job_id,
+                "completed",
+                1.0,
+                f"Test accuracy: {result.test_accuracy:.1%}",
+            )
+        except Exception as exc:
+            registry.update_job(job_id, "failed", 1.0, str(exc))
+
+    asyncio.create_task(_run())
+    return RedirectResponse(f"/jobs/{job_id}", status_code=303)
+
+
+@router.get("/experiment/{symbol}/{timeframe}/{run_id}")
+def experiment_detail(request: Request, symbol: str, timeframe: str, run_id: str):
+    exp_dir = _experiment_dir(request)
+    report_path = exp_dir / symbol / timeframe / run_id / "report.json"
+    if not report_path.exists():
+        raise HTTPException(status_code=404, detail="Experiment not found")
+    with open(report_path) as f:
+        report = json.load(f)
+
+    class ResultProxy:
+        pass
+
+    result = ResultProxy()
+    result.test_accuracy = report["test_accuracy"]
+    result.test_per_class = report["test_per_class"]
+    result.test_confusion = report["test_confusion"]
+    result.hyperparameters = report["hyperparameters"]
+
+    class SplitProxy:
+        pass
+
+    result.split = SplitProxy()
+    result.split.window_size = report["split"]["window_size"]
+    result.split.feature_count = report["split"]["feature_count"]
+    result.split.train_size = report["split"]["train_size"]
+    result.split.val_size = report["split"]["val_size"]
+    result.split.test_size = report["split"]["test_size"]
+    result.split.label_counts = report["split"]["label_counts"]
+
+    return templates.TemplateResponse(
+        request,
+        "experiment.html",
+        context(
+            request,
+            result=result,
+            symbol=symbol,
+            timeframe=timeframe,
+            epoch_data=report["epochs"],
         ),
     )

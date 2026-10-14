@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Эксперимент {{ symbol }} {{ timeframe }}m — Trade Experiment 12{% endblock %}
+{% block head %}
+<script src="/vendor/plotly.min.js?v=6.3.0"></script>
+{% endblock %}
+{% block content %}
+<section class="hero">
+  <div>
+    <span class="eyebrow">Модель</span>
+    <h1>Эксперимент {{ symbol }} · {{ timeframe }}m</h1>
+    <p>Patch-based Transformer, окно {{ result.split.window_size }}, {{ result.split.feature_count }} признаков</p>
+  </div>
+  <div class="metric">
+    <b>{{ "%.1f"|format(result.test_accuracy * 100) }}%</b>
+    <span>test accuracy</span>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Разбиение данных</h2>
+  <div style="display:flex;gap:32px;flex-wrap:wrap">
+    <div class="metric"><b>{{ "{:,}".format(result.split.train_size) }}</b><span>train</span></div>
+    <div class="metric"><b>{{ "{:,}".format(result.split.val_size) }}</b><span>val</span></div>
+    <div class="metric"><b>{{ "{:,}".format(result.split.test_size) }}</b><span>test</span></div>
+  </div>
+  <h3 style="margin-top:16px">Распределение меток</h3>
+  <div style="display:flex;gap:32px;flex-wrap:wrap">
+    {% for name, count in result.split.label_counts.items() %}
+    <div class="metric"><b>{{ "{:,}".format(count) }}</b><span>{{ name }}</span></div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Точность на тесте по классам</h2>
+  <div style="display:flex;gap:32px;flex-wrap:wrap">
+    {% for name, acc in result.test_per_class.items() %}
+    <div class="metric"><b>{{ "%.1f"|format(acc * 100) }}%</b><span>{{ name }}</span></div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Матрица ошибок (test)</h2>
+  <table style="max-width:400px">
+    <thead>
+      <tr><th></th><th>pred up</th><th>pred down</th><th>pred undefined</th></tr>
+    </thead>
+    <tbody>
+      {% for row_name in ["up", "down", "undefined"] %}
+      <tr>
+        <th>{{ row_name }}</th>
+        {% for val in result.test_confusion[loop.index0] %}
+        <td>{{ val }}</td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel">
+  <h2>Обучение по эпохам</h2>
+  <div id="loss-chart" style="height:350px;min-height:350px"></div>
+  <div id="acc-chart" style="height:350px;min-height:350px"></div>
+</section>
+
+<section class="panel">
+  <h2>Гиперпараметры</h2>
+  <table style="max-width:500px">
+    {% for key, val in result.hyperparameters.items() %}
+    <tr><th>{{ key }}</th><td>{{ val }}</td></tr>
+    {% endfor %}
+  </table>
+</section>
+
+<script>
+(function() {
+  var epochs = {{ epoch_data|tojson }};
+  var ep = epochs.map(function(e){return e.epoch});
+  var tl = epochs.map(function(e){return e.train_loss});
+  var vl = epochs.map(function(e){return e.val_loss});
+  var ta = epochs.map(function(e){return e.train_accuracy * 100});
+  var va = epochs.map(function(e){return e.val_accuracy * 100});
+
+  Plotly.newPlot('loss-chart', [
+    {x:ep,y:tl,name:'Train Loss',type:'scatter',mode:'lines',line:{color:'#55c2a3'}},
+    {x:ep,y:vl,name:'Val Loss',type:'scatter',mode:'lines',line:{color:'#f0b35a'}}
+  ], {
+    title:'Loss',margin:{t:40,b:40,l:60,r:20},
+    paper_bgcolor:'#10171d',plot_bgcolor:'#10171d',
+    font:{color:'#e8eff5'},
+    xaxis:{title:'Epoch',gridcolor:'#24323d'},
+    yaxis:{title:'Loss',gridcolor:'#24323d'}
+  }, {responsive:true});
+
+  Plotly.newPlot('acc-chart', [
+    {x:ep,y:ta,name:'Train Acc %',type:'scatter',mode:'lines',line:{color:'#55c2a3'}},
+    {x:ep,y:va,name:'Val Acc %',type:'scatter',mode:'lines',line:{color:'#f0b35a'}}
+  ], {
+    title:'Accuracy',margin:{t:40,b:40,l:60,r:20},
+    paper_bgcolor:'#10171d',plot_bgcolor:'#10171d',
+    font:{color:'#e8eff5'},
+    xaxis:{title:'Epoch',gridcolor:'#24323d'},
+    yaxis:{title:'%',gridcolor:'#24323d',range:[0,100]}
+  }, {responsive:true});
+})();
+</script>
+{% endblock %}

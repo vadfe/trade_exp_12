@@ -70,6 +70,32 @@ cd C:\path\to\trade_exp_12
 python -m trade_exp_12.main
 ```
 
+## Эксперименты с моделью
+
+Через веб-интерфейс: перейдите на страницу **Эксперименты** (`/experiments`), выберите параметры и нажмите «Запустить». Обучение происходит в фоновом режиме; прогресс отображается на странице задач.
+
+Результаты сохраняются в `data/experiments/` (не попадают в Git). Каждый запуск содержит:
+- `report.json` — полный отчёт с метриками, confusion matrix и историей эпох;
+- `best_model.pt` — веса лучшей модели (по val accuracy).
+
+Страница эксперимента отображает:
+- графики loss/accuracy по эпохам;
+- точность по классам (up / down / undefined);
+- confusion matrix;
+- гиперпараметры.
+
+### Установка PyTorch
+
+На CPU-сервере:
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+```
+
+Если на сервере есть CUDA GPU:
+```bash
+pip install torch
+```
+
 ## Структура зависимостей
 
 - `requirements.txt` — runtime-зависимости сервера.

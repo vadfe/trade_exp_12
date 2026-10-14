@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Эксперименты — Trade Experiment 12{% endblock %}
+{% block content %}
+<section class="hero">
+  <div>
+    <span class="eyebrow">Модель</span>
+    <h1>Эксперименты</h1>
+    <p>Patch-based Transformer: market state classification</p>
+  </div>
+  <div class="metric"><b>{{ experiments|length }}</b><span>запусков</span></div>
+</section>
+
+<section class="panel">
+  <h2>Запуск нового эксперимента</h2>
+  <form method="post" action="/experiment/run" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+    <label>Пара <select name="symbol">
+      {% for s in config.universe.symbols %}<option>{{ s }}</option>{% endfor %}
+    </select></label>
+    <label>TF <select name="timeframe">
+      {% for t in config.universe.timeframes %}<option>{{ t }}</option>{% endfor %}
+    </select></label>
+    <label>Окно <input type="number" name="window_size" value="64" min="16" max="256" style="width:70px"></label>
+    <label>ATR mult <input type="number" name="atr_multiplier" value="3.0" step="0.5" min="0.5" max="20" style="width:70px"></label>
+    <label>Эпохи <input type="number" name="epochs" value="30" min="1" max="200" style="width:70px"></label>
+    <label>d_model <input type="number" name="d_model" value="64" min="16" max="512" style="width:70px"></label>
+    <label>Layers <input type="number" name="n_layers" value="4" min="1" max="12" style="width:70px"></label>
+    <label>LR <input type="number" name="lr" value="0.001" step="0.0001" min="0.0001" max="0.1" style="width:90px"></label>
+    <button type="submit">Запустить</button>
+  </form>
+</section>
+
+{% if experiments %}
+<section class="panel">
+  <h2>Результаты</h2>
+  <table>
+    <thead><tr><th>Пара</th><th>TF</th><th>Запуск</th><th>Test Acc</th><th>Up</th><th>Down</th><th>Undef</th><th>Train</th><th>Val</th><th>Test</th><th></th></tr></thead>
+    <tbody>
+    {% for exp in experiments %}
+    <tr>
+      <td>{{ exp.symbol }}</td>
+      <td>{{ exp.timeframe }}m</td>
+      <td><small>{{ exp.run_id }}</small></td>
+      <td><b>{{ "%.1f"|format(exp.test_accuracy * 100) }}%</b></td>
+      <td>{{ "%.1f"|format(exp.test_per_class.get('up', 0) * 100) }}%</td>
+      <td>{{ "%.1f"|format(exp.test_per_class.get('down', 0) * 100) }}%</td>
+      <td>{{ "%.1f"|format(exp.test_per_class.get('undefined', 0) * 100) }}%</td>
+      <td>{{ "{:,}".format(exp.split.train_size) }}</td>
+      <td>{{ "{:,}".format(exp.split.val_size) }}</td>
+      <td>{{ "{:,}".format(exp.split.test_size) }}</td>
+      <td><a class="button" href="/experiment/{{ exp.symbol }}/{{ exp.timeframe }}/{{ exp.run_id }}">Открыть</a></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% else %}
+<section class="panel"><p class="muted">Экспериментов ещё нет. Запустите первый выше.</p></section>
+{% endif %}
+{% endblock %}

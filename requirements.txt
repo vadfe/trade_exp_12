@@ -9,3 +9,4 @@ pyarrow==23.0.1
 python-multipart==0.0.32
 smartmoneyconcepts==0.0.27
 plotly==6.3.0
+torch==2.14.1
