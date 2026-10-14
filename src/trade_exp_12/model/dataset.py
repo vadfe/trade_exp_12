@@ -13,12 +13,37 @@ from trade_exp_12.reversals.zigzag import detect_atr_reversals
 
 # Feature columns used as model input (relative + SMC, all causal)
 FEATURE_COLUMNS = [
+    # Bar-level
     "log_return",
     "body_atr",
     "upper_wick_atr",
     "lower_wick_atr",
     "range_atr",
     "relative_volume",
+    # Volume spike
+    "volume_spike_10",
+    # Trend
+    "trend_slope_10",
+    "trend_slope_30",
+    # Position in price corridor
+    "position_in_range_20",
+    # Volatility compression/expansion
+    "atr_ratio",
+    # Momentum
+    "roc_5",
+    "roc_15",
+    # Bar sequence patterns
+    "consecutive_direction",
+    "avg_body_atr_5",
+    "avg_upper_wick_5",
+    "avg_lower_wick_5",
+    "avg_range_5",
+    "body_deceleration",
+    "wick_ratio",
+    # Smoothed direction
+    "avg_return_5",
+    "avg_return_10",
+    # SMC
     "smc_resistance_distance_atr",
     "smc_support_distance_atr",
     "smc_bos",

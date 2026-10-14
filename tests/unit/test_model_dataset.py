@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import torch
 
+from trade_exp_12.features.relative import add_relative_features
 from trade_exp_12.model.dataset import (
     FEATURE_COLUMNS,
     NUM_CLASSES,
@@ -33,25 +34,8 @@ def _make_frame(n: int = 200) -> pd.DataFrame:
         "volume": volume,
         "turnover": volume * close,
     })
-    # Add relative features
-    frame["log_return"] = np.log(frame["close"] / frame["close"].shift(1))
-    tr = pd.concat([
-        frame["high"] - frame["low"],
-        (frame["high"] - frame["close"].shift(1)).abs(),
-        (frame["low"] - frame["close"].shift(1)).abs(),
-    ], axis=1).max(axis=1)
-    frame["atr"] = tr.rolling(14, min_periods=14).mean()
-    frame["body_atr"] = (frame["close"] - frame["open"]) / frame["atr"]
-    frame["upper_wick_atr"] = (frame["high"] - frame[["open", "close"]].max(axis=1)) / frame["atr"]
-    frame["lower_wick_atr"] = (frame[["open", "close"]].min(axis=1) - frame["low"]) / frame["atr"]
-    frame["range_atr"] = (frame["high"] - frame["low"]) / frame["atr"]
-    prior_vol = frame["volume"].shift(1).rolling(20, min_periods=20).median()
-    frame["relative_volume"] = frame["volume"] / prior_vol
-    ready_cols = [
-        "log_return", "atr", "body_atr", "upper_wick_atr",
-        "lower_wick_atr", "range_atr", "relative_volume",
-    ]
-    frame["feature_ready"] = frame[ready_cols].notna().all(axis=1)
+    # Use real feature pipeline
+    frame = add_relative_features(frame)
     # SMC features (synthetic)
     frame["smc_swing_high_level"] = high
     frame["smc_swing_low_level"] = low
