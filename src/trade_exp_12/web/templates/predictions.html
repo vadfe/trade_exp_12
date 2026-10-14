@@ -81,8 +81,7 @@
   <div style="display:flex;gap:24px;flex-wrap:wrap;font-size:13px">
     <span><b style="color:#26a69a;font-size:18px">&#9650;</b> предсказанный разворот UP</span>
     <span><b style="color:#ef5350;font-size:18px">&#9660;</b> предсказанный разворот DOWN</span>
-    <span><b style="color:#26a69a;font-size:10px">&#9670;</b> реальный разворот UP</span>
-    <span><b style="color:#ef5350;font-size:10px">&#9670;</b> реальный разворот DOWN</span>
+    <span style="display:inline-block;width:24px;height:2px;background:#f0b35a;vertical-align:middle"></span> реальные развороты (zigzag)</span>
   </div>
 </section>
 
@@ -139,7 +138,12 @@
     document.getElementById('st-bh').textContent = st.buyhold_pnl_pct.toFixed(1);
     document.getElementById('st-excess').textContent = st.excess_pnl_pct.toFixed(1);
 
-    fetch(candleUrl).then(function(r){return r.json()}).then(function(candles) {
+    fetch(candleUrl + '?max_points=100000').then(function(r){return r.json()}).then(function(candles) {
+      /* Initial zoom: last 500 candles */
+      var nCandles = candles.time.length;
+      var initStart = nCandles > 500 ? candles.time[nCandles - 500] : candles.time[0];
+      var initEnd = candles.time[nCandles - 1];
+
       var candleTrace = {
         x: candles.time, open: candles.open, high: candles.high,
         low: candles.low, close: candles.close,
@@ -148,35 +152,40 @@
         decreasing: {line:{color:'#ef5350'}}
       };
 
-      /* Predicted reversal signals */
-      var predUp = {x:[], y:[], name:'Pred UP', mode:'markers', type:'scatter',
-        marker:{symbol:'triangle-up', size:14, color:'#26a69a', line:{width:1.5, color:'#fff'}}};
-      var predDown = {x:[], y:[], name:'Pred DOWN', mode:'markers', type:'scatter',
-        marker:{symbol:'triangle-down', size:14, color:'#ef5350', line:{width:1.5, color:'#fff'}}};
-      data.signals.forEach(function(s) {
-        if (s.direction === 'reversal_up') { predUp.x.push(s.time); predUp.y.push(s.close); }
-        else if (s.direction === 'reversal_down') { predDown.x.push(s.time); predDown.y.push(s.close); }
+      /* True reversals as a zigzag line (not individual markers) */
+      var zigzag = {x:[], y:[], name:'Реальные развороты', mode:'lines+markers',
+        type:'scatter', line:{color:'#f0b35a', width:1.5, dash:'dot'},
+        marker:{size:5, color:'#f0b35a'}};
+      (data.true_markers || []).forEach(function(m) {
+        zigzag.x.push(m.time);
+        zigzag.y.push(m.close);
       });
 
-      /* True reversal markers (smaller, for comparison) */
-      var trueUp = {x:[], y:[], name:'Real UP', mode:'markers', type:'scatter',
-        marker:{symbol:'diamond', size:8, color:'#26a69a', opacity:0.6}};
-      var trueDown = {x:[], y:[], name:'Real DOWN', mode:'markers', type:'scatter',
-        marker:{symbol:'diamond', size:8, color:'#ef5350', opacity:0.6}};
-      (data.true_markers || []).forEach(function(m) {
-        if (m.direction === 'reversal_up') { trueUp.x.push(m.time); trueUp.y.push(m.close); }
-        else if (m.direction === 'reversal_down') { trueDown.x.push(m.time); trueDown.y.push(m.close); }
+      /* Predicted signals as markers */
+      var predUp = {x:[], y:[], name:'Pred UP', mode:'markers', type:'scatter',
+        marker:{symbol:'triangle-up', size:12, color:'#26a69a',
+                line:{width:1, color:'#fff'}}};
+      var predDown = {x:[], y:[], name:'Pred DOWN', mode:'markers', type:'scatter',
+        marker:{symbol:'triangle-down', size:12, color:'#ef5350',
+                line:{width:1, color:'#fff'}}};
+      data.signals.forEach(function(s) {
+        if (s.direction === 'reversal_up') {
+          predUp.x.push(s.time); predUp.y.push(s.close);
+        } else if (s.direction === 'reversal_down') {
+          predDown.x.push(s.time); predDown.y.push(s.close);
+        }
       });
 
       Plotly.newPlot('pred-chart',
-        [candleTrace, trueUp, trueDown, predUp, predDown],
+        [candleTrace, zigzag, predUp, predDown],
         {
           title: '{{ target_symbol }} {{ target_timeframe }}m — развороты',
           margin:{t:40, b:40, l:60, r:20},
           paper_bgcolor:'#10171d', plot_bgcolor:'#10171d',
           font:{color:'#e8eff5'},
-          xaxis:{gridcolor:'#24323d', rangeslider:{visible:false}},
-          yaxis:{gridcolor:'#24323d', title:'Цена'},
+          xaxis:{gridcolor:'#24323d', rangeslider:{visible:false},
+                 range:[initStart, initEnd]},
+          yaxis:{gridcolor:'#24323d', title:'Цена', autorange:true},
           legend:{bgcolor:'rgba(16,23,29,0.8)', font:{size:11}}
         }, {responsive:true}
       );
@@ -185,9 +194,11 @@
       var pnlTimes = data.pnl.map(function(p){return p.time});
       Plotly.newPlot('pnl-chart', [
         {x:pnlTimes, y:data.pnl.map(function(p){return p.strategy}),
-         name:'Стратегия %', type:'scatter', mode:'lines', line:{color:'#26a69a', width:2}},
+         name:'Стратегия %', type:'scatter', mode:'lines',
+         line:{color:'#26a69a', width:2}},
         {x:pnlTimes, y:data.pnl.map(function(p){return p.buyhold}),
-         name:'Buy & Hold %', type:'scatter', mode:'lines', line:{color:'#888', width:1, dash:'dot'}}
+         name:'Buy & Hold %', type:'scatter', mode:'lines',
+         line:{color:'#888', width:1, dash:'dot'}}
       ], {
         title: 'Cumulative PnL',
         margin:{t:40, b:30, l:60, r:20},
