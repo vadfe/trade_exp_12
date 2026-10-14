@@ -92,7 +92,9 @@ def pretrain(
         model.train()
         total_loss = 0.0
         n_batches = 0
-        for (batch,) in train_loader:
+        for batch in train_loader:
+            if isinstance(batch, (list, tuple)):
+                batch = batch[0]
             batch = batch.to(device)
             reconstruction, target, mask = model.pretrain_forward(batch)
             # MSE only on masked positions
@@ -116,7 +118,9 @@ def pretrain(
         val_total = 0.0
         val_n = 0
         with torch.no_grad():
-            for (batch,) in val_loader:
+            for batch in val_loader:
+                if isinstance(batch, (list, tuple)):
+                    batch = batch[0]
                 batch = batch.to(device)
                 reconstruction, target, mask = model.pretrain_forward(batch)
                 mask_f = mask.unsqueeze(-1).expand_as(target).float()
