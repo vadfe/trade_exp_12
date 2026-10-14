@@ -163,28 +163,37 @@
         decreasing: {line:{color:'#ef5350'}}
       };
 
-      /* True reversals as a zigzag line */
+      /* True reversals as a zigzag line (no markers, just line) */
       var zigzag = {x:[], y:[], name:'Реальные развороты',
-        mode:'lines+markers', type:'scatter',
-        line:{color:'#f0b35a', width:1.5, dash:'dot'},
-        marker:{size:5, color:'#f0b35a'}};
+        mode:'lines', type:'scatter',
+        line:{color:'#f0b35a', width:1.5, dash:'dot'}};
       (data.true_markers || []).forEach(function(m) {
         zigzag.x.push(m.time);
         zigzag.y.push(m.close);
       });
 
-      /* Predicted signals as markers */
+      /* Predicted signals: one marker per bar, UP below low, DOWN above high */
       var predUp = {x:[], y:[], name:'Pred UP', mode:'markers',
-        type:'scatter', marker:{symbol:'triangle-up', size:12,
+        type:'scatter', marker:{symbol:'triangle-up', size:10,
         color:'#26a69a', line:{width:1, color:'#fff'}}};
       var predDown = {x:[], y:[], name:'Pred DOWN', mode:'markers',
-        type:'scatter', marker:{symbol:'triangle-down', size:12,
+        type:'scatter', marker:{symbol:'triangle-down', size:10,
         color:'#ef5350', line:{width:1, color:'#fff'}}};
+
+      /* Build a lookup: time -> candle index for low/high */
+      var candleIdx = {};
+      for (var ci = 0; ci < nCandles; ci++) {
+        candleIdx[candles.time[ci]] = ci;
+      }
+
       data.signals.forEach(function(s) {
+        var idx = candleIdx[s.time];
         if (s.direction === 'reversal_up') {
-          predUp.x.push(s.time); predUp.y.push(s.close);
+          predUp.x.push(s.time);
+          predUp.y.push(idx !== undefined ? candles.low[idx] * 0.999 : s.close);
         } else if (s.direction === 'reversal_down') {
-          predDown.x.push(s.time); predDown.y.push(s.close);
+          predDown.x.push(s.time);
+          predDown.y.push(idx !== undefined ? candles.high[idx] * 1.001 : s.close);
         }
       });
 
