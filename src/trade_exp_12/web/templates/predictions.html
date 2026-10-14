@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Предсказания {{ symbol }} {{ timeframe }}m — Trade Experiment 12{% endblock %}
+{% block title %}Предсказания {{ target_symbol }} {{ target_timeframe }}m — Trade Experiment 12{% endblock %}
 {% block head %}
 <script src="/vendor/plotly.min.js?v=6.3.0"></script>
 {% endblock %}
@@ -7,20 +7,45 @@
 <section class="hero">
   <div>
     <span class="eyebrow">Прогон модели</span>
-    <h1>{{ symbol }} · {{ timeframe }}m</h1>
-    <p>Эксперимент {{ run_id }} · окно {{ report.hyperparameters.window_size }} · test_acc={{ "%.1f"|format(report.test_accuracy * 100) }}%</p>
+    <h1>{{ target_symbol }} · {{ target_timeframe }}m</h1>
+    <p>Модель: {{ model_symbol }}/{{ model_timeframe }}m · {{ run_id }} · test_acc={{ "%.1f"|format(report.test_accuracy * 100) }}%</p>
   </div>
-  <div class="metric" id="live-acc"><b>—</b><span>accuracy на видимом</span></div>
+  <div class="metric" id="m-acc"><b>—</b><span>accuracy</span></div>
+  <div class="metric" id="m-pnl"><b>—</b><span>PnL стратегии</span></div>
+  <div class="metric" id="m-excess"><b>—</b><span>vs buy&hold</span></div>
 </section>
 
 <section class="panel">
-  <h2>Легенда</h2>
-  <div style="display:flex;gap:24px;flex-wrap:wrap;font-size:13px">
-    <span><b style="color:#26a69a">&#9650;</b> предсказание UP (верно)</span>
-    <span><b style="color:#ef5350">&#9660;</b> предсказание DOWN (верно)</span>
-    <span><b style="color:#666">&#215;</b> неверное предсказание</span>
-    <span style="color:#888">серый фон = test split</span>
+  <h2>Прогноз на другую пару</h2>
+  <form method="post" action="/predict/run" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+    <input type="hidden" name="run_id" value="{{ run_id }}">
+    <input type="hidden" name="model_symbol" value="{{ model_symbol }}">
+    <input type="hidden" name="model_timeframe" value="{{ model_timeframe }}">
+    <label>Пара <select name="target_symbol">
+      {% for s in config.universe.symbols %}
+      <option {% if s == target_symbol %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select></label>
+    <label>TF <select name="target_timeframe">
+      {% for t in config.universe.timeframes %}
+      <option {% if t == target_timeframe %}selected{% endif %}>{{ t }}</option>
+      {% endfor %}
+    </select></label>
+    <button type="submit">Рассчитать</button>
+  </form>
+  {% if available_predictions %}
+  <div style="margin-top:12px;font-size:13px;color:#8899aa">
+    Готовые:
+    {% for ap in available_predictions %}
+    <a href="/predict/{{ model_symbol }}/{{ model_timeframe }}/{{ run_id }}?target_symbol={{ ap.symbol }}&target_timeframe={{ ap.timeframe }}"
+       style="margin-left:8px">{{ ap.symbol }}/{{ ap.timeframe }}m</a>
+    {% endfor %}
   </div>
+  {% endif %}
+</section>
+
+<section class="panel" id="status-panel" style="display:none">
+  <p id="status-msg" class="muted">Рассчитываю предсказания...</p>
 </section>
 
 <section class="panel">
@@ -28,104 +53,153 @@
 </section>
 
 <section class="panel">
-  <h2>Статистика по всему набору</h2>
+  <div id="pnl-chart" style="height:300px;min-height:300px"></div>
+</section>
+
+<section class="panel">
+  <h2>Статистика</h2>
   <div id="stats" style="display:flex;gap:32px;flex-wrap:wrap">
-    <div class="metric"><b id="st-total">—</b><span>всего точек</span></div>
+    <div class="metric"><b id="st-bars">—</b><span>баров</span></div>
     <div class="metric"><b id="st-correct">—</b><span>верных</span></div>
     <div class="metric"><b id="st-acc">—</b><span>accuracy</span></div>
+    <div class="metric"><b id="st-signals">—</b><span>сигналов</span></div>
+    <div class="metric"><b id="st-winrate">—</b><span>win rate сегментов</span></div>
+    <div class="metric"><b id="st-spnl">—</b><span>PnL стратегии %</span></div>
+    <div class="metric"><b id="st-bh">—</b><span>buy&hold %</span></div>
+    <div class="metric"><b id="st-excess">—</b><span>excess %</span></div>
   </div>
 </section>
 
 <section class="panel">
-  <a class="button" href="/experiment/{{ symbol }}/{{ timeframe }}/{{ run_id }}">Назад к эксперименту</a>
+  <h2>Легенда</h2>
+  <div style="display:flex;gap:24px;flex-wrap:wrap;font-size:13px">
+    <span><span style="display:inline-block;width:16px;height:12px;background:rgba(38,166,154,0.15);border:1px solid #26a69a;vertical-align:middle"></span> зона UP</span>
+    <span><span style="display:inline-block;width:16px;height:12px;background:rgba(239,83,80,0.15);border:1px solid #ef5350;vertical-align:middle"></span> зона DOWN</span>
+    <span><b style="color:#26a69a">&#9650;</b> сигнал UP (смена направления)</span>
+    <span><b style="color:#ef5350">&#9660;</b> сигнал DOWN (смена направления)</span>
+    <span style="color:#888">пунктирная линия = граница train/test</span>
+  </div>
+</section>
+
+<section class="panel">
+  <a class="button" href="/experiment/{{ model_symbol }}/{{ model_timeframe }}/{{ run_id }}">Назад к эксперименту</a>
   <a class="button" href="/experiments" style="margin-left:12px">Все эксперименты</a>
 </section>
 
 <script>
 (function() {
-  var apiUrl = '/api/predict/{{ symbol }}/{{ timeframe }}/{{ run_id }}';
-  var candleUrl = '/api/data/{{ symbol }}/{{ timeframe }}/candles';
-  var hp = {{ report.hyperparameters|tojson }};
+  var predUrl = '/api/predict/{{ model_symbol }}/{{ model_timeframe }}/{{ run_id }}/{{ target_symbol }}/{{ target_timeframe }}';
+  var candleUrl = '/api/data/{{ target_symbol }}/{{ target_timeframe }}/candles';
   var split = {{ report.split|tojson }};
   var totalWindows = split.train_size + split.val_size + split.test_size;
-  /* test split starts after train+val */
   var testStartFrac = (split.train_size + split.val_size) / totalWindows;
+  var statusPanel = document.getElementById('status-panel');
+  var statusMsg = document.getElementById('status-msg');
 
-  Promise.all([
-    fetch(candleUrl).then(r => r.json()),
-    fetch(apiUrl + '?max_points=3000').then(r => r.json())
-  ]).then(function(results) {
-    var candles = results[0];
-    var pred = results[1];
-
-    document.getElementById('st-total').textContent = pred.total.toLocaleString();
-    document.getElementById('st-correct').textContent = pred.correct.toLocaleString();
-    document.getElementById('st-acc').textContent = (pred.accuracy * 100).toFixed(1) + '%';
-    document.getElementById('live-acc').querySelector('b').textContent =
-      (pred.accuracy * 100).toFixed(1) + '%';
-
-    /* candle trace */
-    var candleTrace = {
-      x: candles.time, open: candles.open, high: candles.high,
-      low: candles.low, close: candles.close,
-      type: 'candlestick', name: 'OHLC',
-      increasing: {line:{color:'#26a69a'}},
-      decreasing: {line:{color:'#ef5350'}}
-    };
-
-    /* separate correct predictions by direction */
-    var upOk = {x:[], y:[], name:'UP верно', mode:'markers', type:'scatter',
-      marker:{symbol:'triangle-up', size:10, color:'#26a69a'}};
-    var downOk = {x:[], y:[], name:'DOWN верно', mode:'markers', type:'scatter',
-      marker:{symbol:'triangle-down', size:10, color:'#ef5350'}};
-    var wrong = {x:[], y:[], name:'Неверно', mode:'markers', type:'scatter',
-      marker:{symbol:'x', size:8, color:'#888', line:{width:2, color:'#888'}}};
-
-    pred.points.forEach(function(p) {
-      if (p.correct) {
-        if (p.pred === 'up') { upOk.x.push(p.time); upOk.y.push(p.close); }
-        else if (p.pred === 'down') { downOk.x.push(p.time); downOk.y.push(p.close); }
-      } else {
-        wrong.x.push(p.time);
-        wrong.y.push(p.close);
+  function pollPredictions() {
+    fetch(predUrl).then(function(r){return r.json()}).then(function(data) {
+      if (data.status === 'computing') {
+        statusPanel.style.display = '';
+        statusMsg.textContent = 'Рассчитываю предсказания... Обновляю через 5 секунд.';
+        setTimeout(pollPredictions, 5000);
+        return;
       }
+      statusPanel.style.display = 'none';
+      renderResults(data);
     });
+  }
 
-    /* test split boundary */
-    var shapes = [];
-    if (pred.points.length > 0) {
-      var testIdx = Math.floor(pred.points.length * testStartFrac);
-      if (testIdx > 0 && testIdx < pred.points.length) {
-        var testTime = pred.points[testIdx].time;
+  function renderResults(data) {
+    var st = data.stats;
+    document.getElementById('m-acc').querySelector('b').textContent = (st.accuracy*100).toFixed(1)+'%';
+    document.getElementById('m-pnl').querySelector('b').textContent = st.strategy_pnl_pct.toFixed(1)+'%';
+    document.getElementById('m-excess').querySelector('b').textContent =
+      (st.excess_pnl_pct >= 0 ? '+' : '') + st.excess_pnl_pct.toFixed(1)+'%';
+    document.getElementById('st-bars').textContent = st.total_bars.toLocaleString();
+    document.getElementById('st-correct').textContent = st.correct.toLocaleString();
+    document.getElementById('st-acc').textContent = (st.accuracy*100).toFixed(1)+'%';
+    document.getElementById('st-signals').textContent = st.n_signals;
+    document.getElementById('st-winrate').textContent = (st.segment_win_rate*100).toFixed(1)+'%';
+    document.getElementById('st-spnl').textContent = st.strategy_pnl_pct.toFixed(1);
+    document.getElementById('st-bh').textContent = st.buyhold_pnl_pct.toFixed(1);
+    document.getElementById('st-excess').textContent = st.excess_pnl_pct.toFixed(1);
+
+    /* Fetch candles and overlay predictions */
+    fetch(candleUrl).then(function(r){return r.json()}).then(function(candles) {
+      var candleTrace = {
+        x: candles.time, open: candles.open, high: candles.high,
+        low: candles.low, close: candles.close,
+        type: 'candlestick', name: 'OHLC',
+        increasing: {line:{color:'#26a69a'}},
+        decreasing: {line:{color:'#ef5350'}}
+      };
+
+      /* Build colored background rectangles for UP/DOWN zones */
+      var shapes = [];
+      data.segments.forEach(function(seg) {
         shapes.push({
-          type:'line', x0:testTime, x1:testTime,
-          y0:0, y1:1, yref:'paper',
-          line:{color:'#f0b35a', width:2, dash:'dash'},
+          type:'rect', xref:'x', yref:'paper',
+          x0: seg.start, x1: seg.end,
+          y0: 0, y1: 1,
+          fillcolor: seg.direction === 'up' ? 'rgba(38,166,154,0.10)' : 'rgba(239,83,80,0.10)',
+          line: {width: 0}
         });
+      });
+
+      /* Test split boundary */
+      if (data.signals.length > 0) {
+        var testIdx = Math.floor(data.signals.length * testStartFrac);
+        if (testIdx > 0 && testIdx < data.signals.length) {
+          shapes.push({
+            type:'line', x0: data.signals[testIdx].time, x1: data.signals[testIdx].time,
+            y0:0, y1:1, yref:'paper',
+            line:{color:'#f0b35a', width:2, dash:'dash'}
+          });
+        }
       }
-    }
 
-    var layout = {
-      title: 'Предсказания модели на графике',
-      margin:{t:40, b:40, l:60, r:20},
-      paper_bgcolor:'#10171d', plot_bgcolor:'#10171d',
-      font:{color:'#e8eff5'},
-      xaxis:{gridcolor:'#24323d', rangeslider:{visible:false}},
-      yaxis:{gridcolor:'#24323d', title:'Цена'},
-      shapes: shapes,
-      legend:{bgcolor:'rgba(16,23,29,0.8)', font:{size:11}},
-      annotations: shapes.length > 0 ? [{
-        x: shapes[0].x0, y: 1.02, yref:'paper',
-        text:'test split >', showarrow:false,
-        font:{color:'#f0b35a', size:11}
-      }] : []
-    };
+      /* Signal markers — only at direction transitions */
+      var upSig = {x:[], y:[], name:'Сигнал UP', mode:'markers', type:'scatter',
+        marker:{symbol:'triangle-up', size:14, color:'#26a69a', line:{width:1, color:'#fff'}}};
+      var downSig = {x:[], y:[], name:'Сигнал DOWN', mode:'markers', type:'scatter',
+        marker:{symbol:'triangle-down', size:14, color:'#ef5350', line:{width:1, color:'#fff'}}};
 
-    Plotly.newPlot('pred-chart',
-      [candleTrace, upOk, downOk, wrong],
-      layout, {responsive:true}
-    );
-  });
+      data.signals.forEach(function(s) {
+        if (s.direction === 'up') { upSig.x.push(s.time); upSig.y.push(s.close); }
+        else if (s.direction === 'down') { downSig.x.push(s.time); downSig.y.push(s.close); }
+      });
+
+      Plotly.newPlot('pred-chart', [candleTrace, upSig, downSig], {
+        title: 'Предсказания модели: ' + '{{ target_symbol }} {{ target_timeframe }}m',
+        margin:{t:40, b:40, l:60, r:20},
+        paper_bgcolor:'#10171d', plot_bgcolor:'#10171d',
+        font:{color:'#e8eff5'},
+        xaxis:{gridcolor:'#24323d', rangeslider:{visible:false}},
+        yaxis:{gridcolor:'#24323d', title:'Цена'},
+        shapes: shapes,
+        legend:{bgcolor:'rgba(16,23,29,0.8)', font:{size:11}}
+      }, {responsive:true});
+
+      /* PnL chart */
+      var pnlTimes = data.pnl.map(function(p){return p.time});
+      Plotly.newPlot('pnl-chart', [
+        {x:pnlTimes, y:data.pnl.map(function(p){return p.strategy}),
+         name:'Стратегия %', type:'scatter', mode:'lines', line:{color:'#26a69a', width:2}},
+        {x:pnlTimes, y:data.pnl.map(function(p){return p.buyhold}),
+         name:'Buy & Hold %', type:'scatter', mode:'lines', line:{color:'#888', width:1, dash:'dot'}}
+      ], {
+        title: 'Cumulative PnL',
+        margin:{t:40, b:30, l:60, r:20},
+        paper_bgcolor:'#10171d', plot_bgcolor:'#10171d',
+        font:{color:'#e8eff5'},
+        xaxis:{gridcolor:'#24323d'},
+        yaxis:{gridcolor:'#24323d', title:'%'},
+        legend:{bgcolor:'rgba(16,23,29,0.8)', font:{size:11}}
+      }, {responsive:true});
+    });
+  }
+
+  pollPredictions();
 })();
 </script>
 {% endblock %}

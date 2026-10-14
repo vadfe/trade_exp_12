@@ -15,7 +15,6 @@ from fastapi.templating import Jinja2Templates
 
 from trade_exp_12.data.aggregate import aggregate_candles, aggregate_features
 from trade_exp_12.model.experiment import list_experiments
-from trade_exp_12.model.predict import load_model, predict_on_frame
 from trade_exp_12.reversals.zigzag import detect_atr_reversals, reversals_as_dicts
 
 logger = logging.getLogger("trade_exp_12")
@@ -466,90 +465,108 @@ def experiment_detail(request: Request, symbol: str, timeframe: str, run_id: str
     )
 
 
-@router.get("/api/predict/{symbol}/{timeframe}/{run_id}")
+@router.post("/predict/run")
+def start_prediction(
+    request: Request,
+    run_id: str = Form(...),
+    model_symbol: str = Form(...),
+    model_timeframe: str = Form(...),
+    target_symbol: str = Form(...),
+    target_timeframe: str = Form(...),
+):
+    """Spawn prediction subprocess for any pair using a trained model."""
+    exp_dir = _experiment_dir(request) / model_symbol / model_timeframe / run_id
+    if not (exp_dir / "report.json").exists():
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    registry = request.app.state.registry
+    processed = registry.latest_processed(target_symbol, target_timeframe)
+    if processed is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No processed data for {target_symbol} {target_timeframe}m",
+        )
+    parquet_path = processed["path"]
+    if not Path(parquet_path).is_absolute():
+        parquet_path = str(request.app.state.config.root / parquet_path)
+
+    cmd = [
+        sys.executable, "-m", "trade_exp_12.model.run_predict",
+        "--experiment-dir", str(exp_dir),
+        "--parquet", parquet_path,
+        "--target-symbol", target_symbol,
+        "--target-timeframe", target_timeframe,
+    ]
+    env = {**__import__("os").environ, "SMC_CREDIT": "0"}
+    subprocess.Popen(cmd, env=env, cwd=str(request.app.state.config.root))
+    logger.info(
+        "Spawned prediction subprocess: model=%s/%sm, target=%s/%sm",
+        model_symbol, model_timeframe, target_symbol, target_timeframe,
+    )
+    return RedirectResponse(
+        f"/predict/{model_symbol}/{model_timeframe}/{run_id}"
+        f"?target_symbol={target_symbol}&target_timeframe={target_timeframe}",
+        status_code=303,
+    )
+
+
+@router.get("/api/predict/{model_symbol}/{model_timeframe}/{run_id}/{target_symbol}/{target_timeframe}")
 def prediction_data(
     request: Request,
-    symbol: str,
-    timeframe: str,
+    model_symbol: str,
+    model_timeframe: str,
     run_id: str,
-    start: datetime | None = None,
-    end: datetime | None = None,
-    max_points: int = 2000,
+    target_symbol: str,
+    target_timeframe: str,
 ):
-    """Return model predictions aligned to candle data for charting."""
-    exp_dir = _experiment_dir(request) / symbol / timeframe / run_id
-    report_path = exp_dir / "report.json"
-    if not report_path.exists():
-        raise HTTPException(status_code=404, detail="Experiment not found")
-
-    loaded = request.app.state.data_service.read_latest_processed(symbol, timeframe)
-    if loaded is None:
-        raise HTTPException(status_code=404, detail="Processed dataset not found")
-    _, frame = loaded
-
-    with open(report_path) as f:
-        report = json.load(f)
-
-    hp = report["hyperparameters"]
-    model, _ = load_model(exp_dir)
-    predictions = predict_on_frame(
-        model, frame,
-        window_size=hp["window_size"],
-        atr_multiplier=hp.get("atr_multiplier", 3.0),
-    )
-    if predictions.empty:
-        return {"points": [], "accuracy": 0, "total": 0}
-
-    if start is not None:
-        predictions = predictions[predictions["open_time"] >= start]
-    if end is not None:
-        predictions = predictions[predictions["open_time"] <= end]
-
-    # Downsample for chart display
-    step = max(1, len(predictions) // max(100, min(max_points, 5000)))
-    sampled = predictions.iloc[::step].reset_index(drop=True)
-
-    total = len(predictions)
-    correct = int(predictions["correct"].sum())
-
-    return {
-        "total": total,
-        "correct": correct,
-        "accuracy": round(correct / max(total, 1), 4),
-        "step": step,
-        "points": [
-            {
-                "time": row["open_time"].isoformat()
-                if hasattr(row["open_time"], "isoformat")
-                else str(row["open_time"]),
-                "close": float(row["close"]),
-                "true": row["label_true_name"],
-                "pred": row["label_pred_name"],
-                "prob_up": round(float(row["prob_up"]), 3),
-                "prob_down": round(float(row["prob_down"]), 3),
-                "correct": bool(row["correct"]),
-            }
-            for _, row in sampled.iterrows()
-        ],
-    }
+    """Return cached prediction result (or 202 if still computing)."""
+    exp_dir = _experiment_dir(request) / model_symbol / model_timeframe / run_id
+    pred_path = exp_dir / f"predictions_{target_symbol}_{target_timeframe}.json"
+    if not pred_path.exists():
+        return {"status": "computing"}
+    with open(pred_path) as f:
+        return {"status": "ready", **json.load(f)}
 
 
-@router.get("/predict/{symbol}/{timeframe}/{run_id}")
-def predictions_page(request: Request, symbol: str, timeframe: str, run_id: str):
-    exp_dir = _experiment_dir(request) / symbol / timeframe / run_id
+@router.get("/predict/{model_symbol}/{model_timeframe}/{run_id}")
+def predictions_page(
+    request: Request,
+    model_symbol: str,
+    model_timeframe: str,
+    run_id: str,
+    target_symbol: str | None = None,
+    target_timeframe: str | None = None,
+):
+    exp_dir = _experiment_dir(request) / model_symbol / model_timeframe / run_id
     report_path = exp_dir / "report.json"
     if not report_path.exists():
         raise HTTPException(status_code=404, detail="Experiment not found")
     with open(report_path) as f:
         report = json.load(f)
+
+    t_sym = target_symbol or model_symbol
+    t_tf = target_timeframe or model_timeframe
+
+    # Check which predictions are already computed
+    available = []
+    if exp_dir.exists():
+        for p in exp_dir.glob("predictions_*.json"):
+            name = p.stem.replace("predictions_", "")
+            parts = name.rsplit("_", 1)
+            if len(parts) == 2:
+                available.append({"symbol": parts[0], "timeframe": parts[1]})
+
     return templates.TemplateResponse(
         request,
         "predictions.html",
         context(
             request,
-            symbol=symbol,
-            timeframe=timeframe,
+            model_symbol=model_symbol,
+            model_timeframe=model_timeframe,
             run_id=run_id,
+            target_symbol=t_sym,
+            target_timeframe=t_tf,
             report=report,
+            available_predictions=available,
         ),
     )

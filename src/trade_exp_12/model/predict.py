@@ -50,7 +50,8 @@ def predict_on_frame(
     """Run inference and return a DataFrame with predictions aligned to bars.
 
     Returns a DataFrame with columns:
-        open_time, close, label_true, label_pred, prob_up, prob_down, prob_undefined, correct
+        open_time, open, high, low, close, label_true, label_pred,
+        prob_up, prob_down, correct
     """
     labeled = add_reversal_labels(frame, atr_multiplier)
     ready = labeled[labeled["feature_ready"]].reset_index(drop=True)
@@ -67,12 +68,13 @@ def predict_on_frame(
     all_probs = []
     all_preds = []
     batch_size = 512
+    device = next(model.parameters()).device
     with torch.no_grad():
         for start in range(0, len(windows), batch_size):
-            batch = torch.from_numpy(windows[start : start + batch_size]).float()
+            batch = torch.from_numpy(windows[start : start + batch_size]).float().to(device)
             logits = model(batch)
-            probs = torch.softmax(logits, dim=1).numpy()
-            preds = logits.argmax(dim=1).numpy()
+            probs = torch.softmax(logits, dim=1).cpu().numpy()
+            preds = logits.argmax(dim=1).cpu().numpy()
             all_probs.append(probs)
             all_preds.append(preds)
 
@@ -80,19 +82,129 @@ def predict_on_frame(
     preds = np.concatenate(all_preds)
 
     # Align to the last bar of each window
-    # The first window ends at index (window_size - 1), so predictions
-    # correspond to ready.iloc[window_size-1 : window_size-1+len(windows)]
     offset = window_size - 1
+    sl = slice(offset, offset + len(windows))
     result = pd.DataFrame({
-        "open_time": ready["open_time"].iloc[offset : offset + len(windows)].values,
-        "close": ready["close"].iloc[offset : offset + len(windows)].values,
+        "open_time": ready["open_time"].iloc[sl].values,
+        "open": ready["open"].iloc[sl].values,
+        "high": ready["high"].iloc[sl].values,
+        "low": ready["low"].iloc[sl].values,
+        "close": ready["close"].iloc[sl].values,
         "label_true": window_labels,
         "label_pred": preds,
         "label_true_name": [LABEL_NAMES[i] for i in window_labels],
         "label_pred_name": [LABEL_NAMES[i] for i in preds],
         "prob_up": probs[:, 0],
         "prob_down": probs[:, 1],
-        "prob_undefined": probs[:, 2] if probs.shape[1] > 2 else 0.0,
         "correct": (window_labels == preds).astype(int),
     })
     return result
+
+
+def compute_signals(predictions: pd.DataFrame) -> dict:
+    """Aggregate predictions into chart-ready segments and PnL.
+
+    Returns a dict with:
+        segments: list of {start, end, direction, bars, correct_pct}
+        signals: list of {time, direction, close} — only at transitions
+        pnl: cumulative PnL series
+        stats: summary statistics
+    """
+    if predictions.empty:
+        return {"segments": [], "signals": [], "pnl": [], "stats": {}}
+
+    df = predictions.copy()
+    total = len(df)
+    correct = int(df["correct"].sum())
+
+    # Find signal transitions: where pred changes from up<->down
+    df["prev_pred"] = df["label_pred_name"].shift(1)
+    df["is_signal"] = df["label_pred_name"] != df["prev_pred"]
+    # Always mark first row as a signal
+    df.iloc[0, df.columns.get_loc("is_signal")] = True
+
+    # Build segments (contiguous runs of same prediction)
+    segments = []
+    signals = []
+    seg_start = 0
+    for i in range(1, len(df) + 1):
+        if i == len(df) or df.iloc[i]["is_signal"]:
+            seg = df.iloc[seg_start:i]
+            direction = seg.iloc[0]["label_pred_name"]
+            seg_correct = int(seg["correct"].sum())
+            seg_dict = {
+                "start": _ts(seg.iloc[0]["open_time"]),
+                "end": _ts(seg.iloc[-1]["open_time"]),
+                "direction": direction,
+                "bars": len(seg),
+                "correct_pct": round(seg_correct / len(seg), 3) if len(seg) > 0 else 0,
+            }
+            segments.append(seg_dict)
+            signals.append({
+                "time": _ts(seg.iloc[0]["open_time"]),
+                "direction": direction,
+                "close": float(seg.iloc[0]["close"]),
+            })
+            if i < len(df):
+                seg_start = i
+
+    # Simple PnL: long when UP, short when DOWN, position changes at signals
+    # Returns are computed bar-by-bar on close prices
+    closes = df["close"].values.astype(float)
+    returns = np.diff(closes) / closes[:-1]
+    position = np.where(df["label_pred_name"].values[:-1] == "up", 1.0, -1.0)
+    strategy_returns = position * returns
+    cumulative = np.cumsum(strategy_returns)
+    cumulative = np.insert(cumulative, 0, 0.0)  # start at 0
+
+    # Buy & hold for comparison
+    bh_returns = (closes - closes[0]) / closes[0]
+
+    # Downsample PnL for chart (max ~500 points)
+    step = max(1, len(df) // 500)
+    pnl_points = []
+    for idx in range(0, len(df), step):
+        pnl_points.append({
+            "time": _ts(df.iloc[idx]["open_time"]),
+            "strategy": round(float(cumulative[idx]) * 100, 2),
+            "buyhold": round(float(bh_returns[idx]) * 100, 2),
+        })
+    # Always include last point
+    if len(df) > 0 and (len(df) - 1) % step != 0:
+        pnl_points.append({
+            "time": _ts(df.iloc[-1]["open_time"]),
+            "strategy": round(float(cumulative[-1]) * 100, 2),
+            "buyhold": round(float(bh_returns[-1]) * 100, 2),
+        })
+
+    final_pnl = round(float(cumulative[-1]) * 100, 2)
+    final_bh = round(float(bh_returns[-1]) * 100, 2)
+    n_trades = len(signals)
+
+    # Win rate on segments
+    seg_wins = sum(1 for s in segments if s["correct_pct"] > 0.5)
+
+    stats = {
+        "total_bars": total,
+        "correct": correct,
+        "accuracy": round(correct / max(total, 1), 4),
+        "strategy_pnl_pct": final_pnl,
+        "buyhold_pnl_pct": final_bh,
+        "excess_pnl_pct": round(final_pnl - final_bh, 2),
+        "n_signals": n_trades,
+        "n_segments": len(segments),
+        "segment_win_rate": round(seg_wins / max(len(segments), 1), 3),
+    }
+
+    return {
+        "segments": segments,
+        "signals": signals,
+        "pnl": pnl_points,
+        "stats": stats,
+    }
+
+
+def _ts(val) -> str:
+    if hasattr(val, "isoformat"):
+        return val.isoformat()
+    return str(val)
