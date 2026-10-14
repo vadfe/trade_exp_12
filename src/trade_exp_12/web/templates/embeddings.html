@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}Embeddings — Trade Experiment 12{% endblock %}
+{% block head %}<script src="/vendor/plotly.min.js"></script>{% endblock %}
+{% block content %}
+<section class="hero">
+  <div>
+    <span class="eyebrow">Representation Analysis</span>
+    <h1>Embedding Space</h1>
+    <p>t-SNE projection of encoder embeddings — {{ data.n_points }} windows, {{ data.n_clusters }} clusters</p>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>t-SNE: colored by label</h2>
+  <div id="tsne-labels" style="height:600px"></div>
+</section>
+
+<section class="panel">
+  <h2>t-SNE: colored by cluster</h2>
+  <div id="tsne-clusters" style="height:600px"></div>
+</section>
+
+<section class="panel">
+  <h2>t-SNE: colored by pair</h2>
+  <div id="tsne-pairs" style="height:600px"></div>
+</section>
+
+<section class="panel">
+  <h2>Cluster composition</h2>
+  <table>
+    <thead><tr><th>Cluster</th><th>Total</th><th>Hold</th><th>Rev Up</th><th>Rev Down</th><th>Reversal %</th></tr></thead>
+    <tbody>
+    {% for c in data.cluster_stats %}
+    <tr{% if c.reversal_pct > 10 %} style="background:#1a3a1a"{% endif %}>
+      <td><b>{{ c.cluster }}</b></td>
+      <td>{{ "{:,}".format(c.total) }}</td>
+      <td>{{ "{:,}".format(c.hold) }}</td>
+      <td>{{ c.reversal_up }}</td>
+      <td>{{ c.reversal_down }}</td>
+      <td><b>{{ c.reversal_pct }}%</b></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted">Rows with >10% reversals highlighted. If reversals concentrate in specific clusters, the encoder learned meaningful structure.</p>
+</section>
+
+<script>
+var pts = {{ data.points | tojson }};
+var colors = {hold: 'rgba(100,100,100,0.3)', reversal_up: '#00cc66', reversal_down: '#ff4444'};
+var pairColors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2'];
+
+// Group by label
+var labelGroups = {};
+for (var i = 0; i < pts.x.length; i++) {
+  var lbl = pts.label[i];
+  if (!labelGroups[lbl]) labelGroups[lbl] = {x:[], y:[], text:[]};
+  labelGroups[lbl].x.push(pts.x[i]);
+  labelGroups[lbl].y.push(pts.y[i]);
+  labelGroups[lbl].text.push(lbl + ' | cluster=' + pts.cluster[i] + ' | ' + pts.pair[i]);
+}
+
+var labelTraces = [];
+// Draw hold first (background), then reversals on top
+['hold', 'reversal_up', 'reversal_down'].forEach(function(lbl) {
+  if (!labelGroups[lbl]) return;
+  var g = labelGroups[lbl];
+  labelTraces.push({
+    x: g.x, y: g.y, text: g.text,
+    mode: 'markers', type: 'scattergl', name: lbl,
+    marker: {color: colors[lbl], size: lbl === 'hold' ? 2 : 5},
+    hoverinfo: 'text',
+  });
+});
+
+Plotly.newPlot('tsne-labels', labelTraces, {
+  template: 'plotly_dark', margin: {t:10},
+  xaxis: {title: 't-SNE 1', zeroline: false},
+  yaxis: {title: 't-SNE 2', zeroline: false},
+  legend: {x: 0, y: 1},
+});
+
+// By cluster
+var clusterGroups = {};
+for (var i = 0; i < pts.x.length; i++) {
+  var c = pts.cluster[i];
+  if (!clusterGroups[c]) clusterGroups[c] = {x:[], y:[], text:[]};
+  clusterGroups[c].x.push(pts.x[i]);
+  clusterGroups[c].y.push(pts.y[i]);
+  clusterGroups[c].text.push('cluster=' + c + ' | ' + pts.label[i] + ' | ' + pts.pair[i]);
+}
+var clusterTraces = [];
+Object.keys(clusterGroups).sort(function(a,b){return a-b}).forEach(function(c) {
+  var g = clusterGroups[c];
+  clusterTraces.push({
+    x: g.x, y: g.y, text: g.text,
+    mode: 'markers', type: 'scattergl', name: 'Cluster ' + c,
+    marker: {size: 3}, hoverinfo: 'text',
+  });
+});
+Plotly.newPlot('tsne-clusters', clusterTraces, {
+  template: 'plotly_dark', margin: {t:10},
+  xaxis: {title: 't-SNE 1', zeroline: false},
+  yaxis: {title: 't-SNE 2', zeroline: false},
+});
+
+// By pair
+var pairGroups = {};
+for (var i = 0; i < pts.x.length; i++) {
+  var p = pts.pair[i];
+  if (!pairGroups[p]) pairGroups[p] = {x:[], y:[], text:[]};
+  pairGroups[p].x.push(pts.x[i]);
+  pairGroups[p].y.push(pts.y[i]);
+  pairGroups[p].text.push(p + ' | ' + pts.label[i] + ' | cluster=' + pts.cluster[i]);
+}
+var pairTraces = [];
+var pi = 0;
+Object.keys(pairGroups).forEach(function(p) {
+  var g = pairGroups[p];
+  pairTraces.push({
+    x: g.x, y: g.y, text: g.text,
+    mode: 'markers', type: 'scattergl', name: p,
+    marker: {size: 3, color: pairColors[pi % pairColors.length]}, hoverinfo: 'text',
+  });
+  pi++;
+});
+Plotly.newPlot('tsne-pairs', pairTraces, {
+  template: 'plotly_dark', margin: {t:10},
+  xaxis: {title: 't-SNE 1', zeroline: false},
+  yaxis: {title: 't-SNE 2', zeroline: false},
+});
+</script>
+{% endblock %}

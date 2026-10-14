@@ -825,3 +825,78 @@ def finetune_detail(request: Request, symbol: str, timeframe: str, run_id: str):
             symbol=symbol, timeframe=timeframe, run_id=run_id,
         ),
     )
+
+
+@router.post("/v2/embeddings/run")
+async def start_embeddings(
+    request: Request,
+    pretrain_run_id: str = Form(...),
+    n_clusters: int = Form(8),
+    max_windows: int = Form(20000),
+    atr_multiplier: float = Form(3.0),
+):
+    """Launch embedding analysis for a pretrained encoder."""
+    pretrain_root = _pretrain_dir(request) / pretrain_run_id
+    encoder_path = pretrain_root / "encoder.pt"
+    report_path = pretrain_root / "report.json"
+    if not encoder_path.exists() or not report_path.exists():
+        raise HTTPException(status_code=404, detail="Pretrained encoder not found")
+
+    registry = request.app.state.registry
+    settings = request.app.state.config.settings
+
+    # Collect all processed parquets
+    parquet_paths = []
+    for symbol in settings.universe.symbols:
+        for timeframe in settings.universe.timeframes:
+            rec = registry.latest_processed(symbol, timeframe)
+            if rec is not None:
+                p = rec["path"]
+                if not Path(p).is_absolute():
+                    p = str(request.app.state.config.root / p)
+                parquet_paths.append(p)
+
+    if not parquet_paths:
+        raise HTTPException(status_code=404, detail="No processed datasets found")
+
+    output_path = pretrain_root / "embeddings.json"
+    job_id = registry.create_job("embeddings_v2", "ALL", "ALL")
+    db_path = str(registry.path)
+
+    with open(report_path) as f:
+        pt_report = json.load(f)
+    window_size = pt_report["hyperparameters"]["window_size"]
+
+    cmd = [
+        sys.executable, "-m", "trade_exp_12.model.run_embeddings",
+        "--encoder-path", str(encoder_path),
+        "--pretrain-report", str(report_path),
+        "--parquets", *parquet_paths,
+        "--output", str(output_path),
+        "--window-size", str(window_size),
+        "--atr-multiplier", str(atr_multiplier),
+        "--n-clusters", str(max(2, min(n_clusters, 50))),
+        "--max-windows", str(max(1000, min(max_windows, 100000))),
+        "--db", db_path,
+        "--job-id", str(job_id),
+    ]
+
+    env = {**__import__("os").environ, "SMC_CREDIT": "0"}
+    subprocess.Popen(cmd, env=env, cwd=str(request.app.state.config.root))
+    logger.info("Spawned embeddings analysis (job %d)", job_id)
+    return RedirectResponse(f"/jobs/{job_id}", status_code=303)
+
+
+@router.get("/v2/embeddings/{run_id}")
+def embeddings_page(request: Request, run_id: str):
+    """Embedding visualization page."""
+    emb_path = _pretrain_dir(request) / run_id / "embeddings.json"
+    if not emb_path.exists():
+        raise HTTPException(status_code=404, detail="Embeddings not found. Run analysis first.")
+    with open(emb_path) as f:
+        data = json.load(f)
+    return templates.TemplateResponse(
+        request,
+        "embeddings.html",
+        context(request, data=data, run_id=run_id),
+    )
