@@ -89,11 +89,16 @@ def _evaluate(
 
 
 def compute_class_weights(dataset: PatchDataset) -> torch.Tensor:
-    """Compute inverse-frequency class weights for balanced loss."""
+    """Compute sqrt-inverse-frequency class weights for balanced loss.
+
+    Plain inverse-frequency gives reversal classes ~43x weight, causing
+    the model to over-predict reversals (precision <10%).  Using the
+    square root (~6.5x) balances precision and recall.
+    """
     labels = dataset.labels.numpy()
     counts = np.bincount(labels, minlength=NUM_CLASSES).astype(np.float32)
     counts = np.maximum(counts, 1.0)
-    weights = 1.0 / counts
+    weights = np.sqrt(1.0 / counts)
     weights /= weights.sum()
     weights *= NUM_CLASSES
     return torch.from_numpy(weights)
