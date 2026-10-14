@@ -135,21 +135,29 @@ def main() -> None:
     pair_ids = np.concatenate(all_pair_ids)
     log.info("Total: %d windows", len(windows))
 
-    # Subsample if too many
-    if len(windows) > args.max_windows:
-        rng = np.random.default_rng(42)
-        # Stratified: keep all reversals, subsample hold
-        rev_mask = labels > 0
-        rev_idx = np.where(rev_mask)[0]
-        hold_idx = np.where(~rev_mask)[0]
-        n_hold = args.max_windows - len(rev_idx)
-        if n_hold > 0 and n_hold < len(hold_idx):
-            hold_idx = rng.choice(hold_idx, size=n_hold, replace=False)
-        idx = np.sort(np.concatenate([rev_idx, hold_idx]))
-        windows = windows[idx]
-        labels = labels[idx]
-        pair_ids = pair_ids[idx]
-        log.info("Subsampled to %d windows (%d reversals kept)", len(windows), rev_mask.sum())
+    # Subsample: balanced 50/50 hold vs reversal
+    rng = np.random.default_rng(42)
+    rev_mask = labels > 0
+    rev_idx = np.where(rev_mask)[0]
+    hold_idx = np.where(~rev_mask)[0]
+
+    half = args.max_windows // 2
+    # Subsample reversals if needed
+    if len(rev_idx) > half:
+        rev_idx = rng.choice(rev_idx, size=half, replace=False)
+    # Match hold count to reversal count for balance
+    n_hold = min(len(hold_idx), max(half, len(rev_idx)))
+    if n_hold > 0:
+        hold_idx = rng.choice(hold_idx, size=n_hold, replace=False)
+
+    idx = np.sort(np.concatenate([rev_idx, hold_idx]))
+    windows = windows[idx]
+    labels = labels[idx]
+    pair_ids = pair_ids[idx]
+    log.info(
+        "Subsampled to %d windows (reversals=%d, hold=%d)",
+        len(windows), len(rev_idx), len(hold_idx),
+    )
 
     # Generate embeddings
     _update_job(args.db, args.job_id, "running", 0.3, "Computing embeddings")
