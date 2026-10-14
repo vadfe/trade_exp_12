@@ -10,6 +10,8 @@ __pycache__/
 
 data/**/*.db-*
 data/experiments/
+data/experiments_v2/
+data/pretrain/
 artifacts/models/
 artifacts/reports/
 !data/**/.gitkeep
