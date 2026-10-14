@@ -163,39 +163,60 @@
         decreasing: {line:{color:'#ef5350'}}
       };
 
-      /* True reversals as a zigzag line (no markers, just line) */
-      var zigzag = {x:[], y:[], name:'Реальные развороты',
-        mode:'lines', type:'scatter',
-        line:{color:'#f0b35a', width:1.5, dash:'dot'}};
-      (data.true_markers || []).forEach(function(m) {
-        zigzag.x.push(m.time);
-        zigzag.y.push(m.close);
+      /* Pre-parse all timestamps to ms for fast filtering */
+      var candleTimes = candles.time.map(function(t){return new Date(t).getTime()});
+
+      /* Build lookup: time string -> candle index */
+      var candleIdx = {};
+      for (var ci = 0; ci < nCandles; ci++) candleIdx[candles.time[ci]] = ci;
+
+      /* Pre-parse signal times to ms */
+      var allSignals = data.signals.map(function(s) {
+        return {ms: new Date(s.time).getTime(), time: s.time, dir: s.direction, close: s.close};
+      });
+      var allTrue = (data.true_markers || []).map(function(m) {
+        return {ms: new Date(m.time).getTime(), time: m.time, close: m.close};
       });
 
-      /* Predicted signals: one marker per bar, UP below low, DOWN above high */
-      var predUp = {x:[], y:[], name:'Pred UP', mode:'markers',
-        type:'scatter', marker:{symbol:'triangle-up', size:10,
-        color:'#26a69a', line:{width:1, color:'#fff'}}};
-      var predDown = {x:[], y:[], name:'Pred DOWN', mode:'markers',
-        type:'scatter', marker:{symbol:'triangle-down', size:10,
-        color:'#ef5350', line:{width:1, color:'#fff'}}};
-
-      /* Build a lookup: time -> candle index for low/high */
-      var candleIdx = {};
-      for (var ci = 0; ci < nCandles; ci++) {
-        candleIdx[candles.time[ci]] = ci;
+      /* Filter signals/zigzag to a time range */
+      function filterRange(startMs, endMs) {
+        var upX=[], upY=[], dnX=[], dnY=[], zzX=[], zzY=[];
+        for (var i = 0; i < allSignals.length; i++) {
+          var s = allSignals[i];
+          if (s.ms < startMs || s.ms > endMs) continue;
+          var idx = candleIdx[s.time];
+          if (s.dir === 'reversal_up') {
+            upX.push(s.time);
+            upY.push(idx !== undefined ? candles.low[idx] * 0.999 : s.close);
+          } else {
+            dnX.push(s.time);
+            dnY.push(idx !== undefined ? candles.high[idx] * 1.001 : s.close);
+          }
+        }
+        for (var j = 0; j < allTrue.length; j++) {
+          var m = allTrue[j];
+          if (m.ms < startMs || m.ms > endMs) continue;
+          zzX.push(m.time); zzY.push(m.close);
+        }
+        return {upX:upX, upY:upY, dnX:dnX, dnY:dnY, zzX:zzX, zzY:zzY};
       }
 
-      data.signals.forEach(function(s) {
-        var idx = candleIdx[s.time];
-        if (s.direction === 'reversal_up') {
-          predUp.x.push(s.time);
-          predUp.y.push(idx !== undefined ? candles.low[idx] * 0.999 : s.close);
-        } else if (s.direction === 'reversal_down') {
-          predDown.x.push(s.time);
-          predDown.y.push(idx !== undefined ? candles.high[idx] * 1.001 : s.close);
-        }
-      });
+      var initStartMs = candleTimes[viewStart];
+      var initEndMs = candleTimes[nCandles - 1];
+      var initData = filterRange(initStartMs, initEndMs);
+
+      /* Zigzag: line only, visible range */
+      var zigzag = {x:initData.zzX, y:initData.zzY, name:'Реальные развороты',
+        mode:'lines', type:'scatter',
+        line:{color:'#f0b35a', width:1.5, dash:'dot'}};
+
+      /* Predicted signals: visible range only */
+      var predUp = {x:initData.upX, y:initData.upY, name:'Pred UP',
+        mode:'markers', type:'scatter', marker:{symbol:'triangle-up',
+        size:10, color:'#26a69a', line:{width:1, color:'#fff'}}};
+      var predDown = {x:initData.dnX, y:initData.dnY, name:'Pred DOWN',
+        mode:'markers', type:'scatter', marker:{symbol:'triangle-down',
+        size:10, color:'#ef5350', line:{width:1, color:'#fff'}}};
 
       var chartDiv = document.getElementById('pred-chart');
       Plotly.newPlot(chartDiv,
@@ -213,27 +234,34 @@
         }, {responsive:true}
       );
 
-      /* Re-scale Y axis when the user zooms or pans */
+      /* On zoom/pan: update Y range AND replace marker/zigzag data */
+      var updating = false;
       chartDiv.on('plotly_relayout', function(evt) {
+        if (updating) return;
         var xr = evt['xaxis.range'] || [
           evt['xaxis.range[0]'], evt['xaxis.range[1]']
         ];
         if (!xr || !xr[0] || !xr[1]) return;
         var x0 = new Date(xr[0]).getTime();
         var x1 = new Date(xr[1]).getTime();
+
+        /* Y range from visible candles */
         var lo = Infinity, hi = -Infinity;
         for (var i = 0; i < nCandles; i++) {
-          var t = new Date(candles.time[i]).getTime();
-          if (t < x0 || t > x1) continue;
+          if (candleTimes[i] < x0 || candleTimes[i] > x1) continue;
           if (candles.low[i] < lo) lo = candles.low[i];
           if (candles.high[i] > hi) hi = candles.high[i];
         }
-        if (lo < Infinity) {
-          var pad = (hi - lo) * 0.08;
-          Plotly.relayout(chartDiv, {
-            'yaxis.range': [lo - pad, hi + pad]
-          });
-        }
+
+        /* Filter markers to visible range */
+        var vis = filterRange(x0, x1);
+
+        updating = true;
+        Plotly.update(chartDiv,
+          {x:[vis.zzX, vis.upX, vis.dnX], y:[vis.zzY, vis.upY, vis.dnY]},
+          lo < Infinity ? {'yaxis.range': [lo-(hi-lo)*0.08, hi+(hi-lo)*0.08]} : {},
+          [1, 2, 3]  /* trace indices: zigzag=1, predUp=2, predDown=3 */
+        ).then(function(){ updating = false; });
       });
 
       /* PnL chart */
