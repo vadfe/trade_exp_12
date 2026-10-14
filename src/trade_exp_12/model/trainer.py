@@ -70,7 +70,22 @@ def _evaluate(
     for i, name in enumerate(LABEL_NAMES):
         class_total = confusion[i].sum()
         per_class[name] = float(confusion[i, i] / max(class_total, 1))
-    return avg_loss, accuracy, per_class, confusion
+
+    # F1-score for reversal classes (skip hold=0)
+    f1_sum = 0.0
+    f1_count = 0
+    for i in range(1, NUM_CLASSES):
+        tp = confusion[i, i]
+        fp = confusion[:, i].sum() - tp
+        fn = confusion[i, :].sum() - tp
+        precision = tp / max(tp + fp, 1)
+        recall = tp / max(tp + fn, 1)
+        f1 = 2 * precision * recall / max(precision + recall, 1e-9)
+        f1_sum += f1
+        f1_count += 1
+    reversal_f1 = f1_sum / max(f1_count, 1)
+
+    return avg_loss, accuracy, per_class, confusion, reversal_f1
 
 
 def compute_class_weights(dataset: PatchDataset) -> torch.Tensor:
@@ -134,7 +149,7 @@ def train(
     test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
 
     history: list[EpochMetrics] = []
-    best_val_acc = 0.0
+    best_val_f1 = 0.0
 
     for epoch in range(1, epochs + 1):
         t0 = time.time()
@@ -161,7 +176,9 @@ def train(
 
         train_loss = running_loss / max(running_total, 1)
         train_acc = running_correct / max(running_total, 1)
-        val_loss, val_acc, val_per_class, _ = _evaluate(model, val_loader, criterion, device)
+        val_loss, val_acc, val_per_class, _, val_f1 = _evaluate(
+            model, val_loader, criterion, device,
+        )
         elapsed = time.time() - t0
 
         metrics = EpochMetrics(
@@ -175,8 +192,8 @@ def train(
         )
         history.append(metrics)
 
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
+        if val_f1 > best_val_f1:
+            best_val_f1 = val_f1
             torch.save(model.state_dict(), output_dir / "best_model.pt")
 
         if progress_callback:
@@ -184,8 +201,8 @@ def train(
 
     # Load best model for test evaluation
     model.load_state_dict(torch.load(output_dir / "best_model.pt", weights_only=True))
-    test_loss, test_acc, test_per_class, test_confusion = _evaluate(
-        model, test_loader, criterion, device
+    test_loss, test_acc, test_per_class, test_confusion, test_f1 = _evaluate(
+        model, test_loader, criterion, device,
     )
 
     result = TrainResult(

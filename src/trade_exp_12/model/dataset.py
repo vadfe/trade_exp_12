@@ -32,8 +32,8 @@ FEATURE_COLUMNS = [
     "smc_active_bearish_ob_count",
 ]
 
-LABEL_MAP = {"up": 0, "down": 1, "undefined": 2}
-LABEL_NAMES = ["up", "down", "undefined"]
+LABEL_MAP = {"hold": 0, "reversal_up": 1, "reversal_down": 2}
+LABEL_NAMES = ["hold", "reversal_up", "reversal_down"]
 NUM_CLASSES = len(LABEL_MAP)
 
 
@@ -50,36 +50,31 @@ class SplitInfo:
 def add_reversal_labels(
     frame: pd.DataFrame, atr_multiplier: float = 3.0
 ) -> pd.DataFrame:
-    """Add a ``label`` column (up=0, down=1, undefined=2) based on ATR zigzag.
+    """Add a ``label`` column based on ATR zigzag reversal detection.
 
-    The label at each bar is the direction of the *next* confirmed reversal
-    that is already causally known at that bar (``known_at <= bar_time``).
-    Bars before the first reversal or after the last one are ``undefined``.
+    Labels:
+        hold (0) — no reversal at this bar
+        reversal_up (1) — confirmed price minimum (reversal upward)
+        reversal_down (2) — confirmed price maximum (reversal downward)
+
+    The label is placed on the pivot bar (the extremum), not on the
+    confirmation bar.  Confirmation is used only to decide whether
+    the extremum is a real reversal.
     """
     result = frame.copy()
     reversals = detect_atr_reversals(result, atr_multiplier)
-    labels = np.full(len(result), LABEL_MAP["undefined"], dtype=np.int64)
+    labels = np.full(len(result), LABEL_MAP["hold"], dtype=np.int64)
 
     times = result["open_time"]
-    # Build sorted list of (known_at_index, direction)
-    reversal_events = []
     for reversal in reversals:
-        known_at = pd.Timestamp(reversal.known_at)
-        idx_arr = times[times >= known_at].index
+        pivot_ts = pd.Timestamp(reversal.pivot_time)
+        idx_arr = times[times == pivot_ts].index
         if len(idx_arr) > 0:
-            reversal_events.append((idx_arr[0], LABEL_MAP[reversal.direction]))
-
-    reversal_events.sort(key=lambda x: x[0])
-
-    # For each bar, find the next reversal event
-    if reversal_events:
-        event_indices = np.array([e[0] for e in reversal_events])
-        event_labels = np.array([e[1] for e in reversal_events])
-        for i in range(len(result)):
-            # Find first event at or after position i
-            pos = np.searchsorted(event_indices, i, side="left")
-            if pos < len(event_indices):
-                labels[i] = event_labels[pos]
+            label_key = (
+                "reversal_up" if reversal.direction == "up"
+                else "reversal_down"
+            )
+            labels[idx_arr[0]] = LABEL_MAP[label_key]
 
     result["label"] = labels
     return result

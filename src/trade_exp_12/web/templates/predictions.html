@@ -8,11 +8,12 @@
   <div>
     <span class="eyebrow">Прогон модели</span>
     <h1>{{ target_symbol }} · {{ target_timeframe }}m</h1>
-    <p>Модель: {{ model_symbol }}/{{ model_timeframe }}m · {{ run_id }} · test_acc={{ "%.1f"|format(report.test_accuracy * 100) }}%</p>
+    <p>Модель: {{ model_symbol }}/{{ model_timeframe }}m · {{ run_id }}</p>
   </div>
-  <div class="metric" id="m-acc"><b>—</b><span>accuracy</span></div>
+  <div class="metric" id="m-f1"><b>—</b><span>F1 разворотов</span></div>
+  <div class="metric" id="m-prec"><b>—</b><span>precision</span></div>
+  <div class="metric" id="m-recall"><b>—</b><span>recall</span></div>
   <div class="metric" id="m-pnl"><b>—</b><span>PnL стратегии</span></div>
-  <div class="metric" id="m-excess"><b>—</b><span>vs buy&hold</span></div>
 </section>
 
 <section class="panel">
@@ -57,13 +58,18 @@
 </section>
 
 <section class="panel">
-  <h2>Статистика</h2>
+  <h2>Детекция разворотов</h2>
   <div id="stats" style="display:flex;gap:32px;flex-wrap:wrap">
-    <div class="metric"><b id="st-bars">—</b><span>баров</span></div>
-    <div class="metric"><b id="st-correct">—</b><span>верных</span></div>
-    <div class="metric"><b id="st-acc">—</b><span>accuracy</span></div>
-    <div class="metric"><b id="st-signals">—</b><span>сигналов</span></div>
-    <div class="metric"><b id="st-winrate">—</b><span>win rate сегментов</span></div>
+    <div class="metric"><b id="st-bars">—</b><span>всего баров</span></div>
+    <div class="metric"><b id="st-true">—</b><span>реальных разворотов</span></div>
+    <div class="metric"><b id="st-pred">—</b><span>предсказанных</span></div>
+    <div class="metric"><b id="st-tp">—</b><span>TP</span></div>
+    <div class="metric"><b id="st-fp">—</b><span>FP</span></div>
+    <div class="metric"><b id="st-fn">—</b><span>FN</span></div>
+    <div class="metric"><b id="st-prec">—</b><span>precision</span></div>
+    <div class="metric"><b id="st-recall">—</b><span>recall</span></div>
+    <div class="metric"><b id="st-f1">—</b><span>F1</span></div>
+    <div class="metric"><b id="st-win">—</b><span>win rate</span></div>
     <div class="metric"><b id="st-spnl">—</b><span>PnL стратегии %</span></div>
     <div class="metric"><b id="st-bh">—</b><span>buy&hold %</span></div>
     <div class="metric"><b id="st-excess">—</b><span>excess %</span></div>
@@ -73,11 +79,10 @@
 <section class="panel">
   <h2>Легенда</h2>
   <div style="display:flex;gap:24px;flex-wrap:wrap;font-size:13px">
-    <span><span style="display:inline-block;width:16px;height:12px;background:rgba(38,166,154,0.15);border:1px solid #26a69a;vertical-align:middle"></span> зона UP</span>
-    <span><span style="display:inline-block;width:16px;height:12px;background:rgba(239,83,80,0.15);border:1px solid #ef5350;vertical-align:middle"></span> зона DOWN</span>
-    <span><b style="color:#26a69a">&#9650;</b> сигнал UP (смена направления)</span>
-    <span><b style="color:#ef5350">&#9660;</b> сигнал DOWN (смена направления)</span>
-    <span style="color:#888">пунктирная линия = граница train/test</span>
+    <span><b style="color:#26a69a;font-size:18px">&#9650;</b> предсказанный разворот UP</span>
+    <span><b style="color:#ef5350;font-size:18px">&#9660;</b> предсказанный разворот DOWN</span>
+    <span><b style="color:#26a69a;font-size:10px">&#9670;</b> реальный разворот UP</span>
+    <span><b style="color:#ef5350;font-size:10px">&#9670;</b> реальный разворот DOWN</span>
   </div>
 </section>
 
@@ -90,13 +95,10 @@
 (function() {
   var predUrl = '/api/predict/{{ model_symbol }}/{{ model_timeframe }}/{{ run_id }}/{{ target_symbol }}/{{ target_timeframe }}';
   var candleUrl = '/api/data/{{ target_symbol }}/{{ target_timeframe }}/candles';
-  var split = {{ report.split|tojson }};
-  var totalWindows = split.train_size + split.val_size + split.test_size;
-  var testStartFrac = (split.train_size + split.val_size) / totalWindows;
   var statusPanel = document.getElementById('status-panel');
   var statusMsg = document.getElementById('status-msg');
   var pollStart = Date.now();
-  var POLL_TIMEOUT = 180000; /* 3 minutes */
+  var POLL_TIMEOUT = 180000;
 
   function pollPredictions() {
     fetch(predUrl).then(function(r){return r.json()}).then(function(data) {
@@ -119,20 +121,24 @@
 
   function renderResults(data) {
     var st = data.stats;
-    document.getElementById('m-acc').querySelector('b').textContent = (st.accuracy*100).toFixed(1)+'%';
+    document.getElementById('m-f1').querySelector('b').textContent = (st.f1*100).toFixed(1)+'%';
+    document.getElementById('m-prec').querySelector('b').textContent = (st.precision*100).toFixed(1)+'%';
+    document.getElementById('m-recall').querySelector('b').textContent = (st.recall*100).toFixed(1)+'%';
     document.getElementById('m-pnl').querySelector('b').textContent = st.strategy_pnl_pct.toFixed(1)+'%';
-    document.getElementById('m-excess').querySelector('b').textContent =
-      (st.excess_pnl_pct >= 0 ? '+' : '') + st.excess_pnl_pct.toFixed(1)+'%';
     document.getElementById('st-bars').textContent = st.total_bars.toLocaleString();
-    document.getElementById('st-correct').textContent = st.correct.toLocaleString();
-    document.getElementById('st-acc').textContent = (st.accuracy*100).toFixed(1)+'%';
-    document.getElementById('st-signals').textContent = st.n_signals;
-    document.getElementById('st-winrate').textContent = (st.segment_win_rate*100).toFixed(1)+'%';
+    document.getElementById('st-true').textContent = st.true_reversals;
+    document.getElementById('st-pred').textContent = st.pred_reversals;
+    document.getElementById('st-tp').textContent = st.tp;
+    document.getElementById('st-fp').textContent = st.fp;
+    document.getElementById('st-fn').textContent = st.fn;
+    document.getElementById('st-prec').textContent = (st.precision*100).toFixed(1)+'%';
+    document.getElementById('st-recall').textContent = (st.recall*100).toFixed(1)+'%';
+    document.getElementById('st-f1').textContent = (st.f1*100).toFixed(1)+'%';
+    document.getElementById('st-win').textContent = (st.win_rate*100).toFixed(1)+'%';
     document.getElementById('st-spnl').textContent = st.strategy_pnl_pct.toFixed(1);
     document.getElementById('st-bh').textContent = st.buyhold_pnl_pct.toFixed(1);
     document.getElementById('st-excess').textContent = st.excess_pnl_pct.toFixed(1);
 
-    /* Fetch candles and overlay predictions */
     fetch(candleUrl).then(function(r){return r.json()}).then(function(candles) {
       var candleTrace = {
         x: candles.time, open: candles.open, high: candles.high,
@@ -142,51 +148,38 @@
         decreasing: {line:{color:'#ef5350'}}
       };
 
-      /* Build colored background rectangles for UP/DOWN zones */
-      var shapes = [];
-      data.segments.forEach(function(seg) {
-        shapes.push({
-          type:'rect', xref:'x', yref:'paper',
-          x0: seg.start, x1: seg.end,
-          y0: 0, y1: 1,
-          fillcolor: seg.direction === 'up' ? 'rgba(38,166,154,0.10)' : 'rgba(239,83,80,0.10)',
-          line: {width: 0}
-        });
-      });
-
-      /* Test split boundary */
-      if (data.signals.length > 0) {
-        var testIdx = Math.floor(data.signals.length * testStartFrac);
-        if (testIdx > 0 && testIdx < data.signals.length) {
-          shapes.push({
-            type:'line', x0: data.signals[testIdx].time, x1: data.signals[testIdx].time,
-            y0:0, y1:1, yref:'paper',
-            line:{color:'#f0b35a', width:2, dash:'dash'}
-          });
-        }
-      }
-
-      /* Signal markers — only at direction transitions */
-      var upSig = {x:[], y:[], name:'Сигнал UP', mode:'markers', type:'scatter',
-        marker:{symbol:'triangle-up', size:14, color:'#26a69a', line:{width:1, color:'#fff'}}};
-      var downSig = {x:[], y:[], name:'Сигнал DOWN', mode:'markers', type:'scatter',
-        marker:{symbol:'triangle-down', size:14, color:'#ef5350', line:{width:1, color:'#fff'}}};
-
+      /* Predicted reversal signals */
+      var predUp = {x:[], y:[], name:'Pred UP', mode:'markers', type:'scatter',
+        marker:{symbol:'triangle-up', size:14, color:'#26a69a', line:{width:1.5, color:'#fff'}}};
+      var predDown = {x:[], y:[], name:'Pred DOWN', mode:'markers', type:'scatter',
+        marker:{symbol:'triangle-down', size:14, color:'#ef5350', line:{width:1.5, color:'#fff'}}};
       data.signals.forEach(function(s) {
-        if (s.direction === 'up') { upSig.x.push(s.time); upSig.y.push(s.close); }
-        else if (s.direction === 'down') { downSig.x.push(s.time); downSig.y.push(s.close); }
+        if (s.direction === 'reversal_up') { predUp.x.push(s.time); predUp.y.push(s.close); }
+        else if (s.direction === 'reversal_down') { predDown.x.push(s.time); predDown.y.push(s.close); }
       });
 
-      Plotly.newPlot('pred-chart', [candleTrace, upSig, downSig], {
-        title: 'Предсказания модели: ' + '{{ target_symbol }} {{ target_timeframe }}m',
-        margin:{t:40, b:40, l:60, r:20},
-        paper_bgcolor:'#10171d', plot_bgcolor:'#10171d',
-        font:{color:'#e8eff5'},
-        xaxis:{gridcolor:'#24323d', rangeslider:{visible:false}},
-        yaxis:{gridcolor:'#24323d', title:'Цена'},
-        shapes: shapes,
-        legend:{bgcolor:'rgba(16,23,29,0.8)', font:{size:11}}
-      }, {responsive:true});
+      /* True reversal markers (smaller, for comparison) */
+      var trueUp = {x:[], y:[], name:'Real UP', mode:'markers', type:'scatter',
+        marker:{symbol:'diamond', size:8, color:'#26a69a', opacity:0.6}};
+      var trueDown = {x:[], y:[], name:'Real DOWN', mode:'markers', type:'scatter',
+        marker:{symbol:'diamond', size:8, color:'#ef5350', opacity:0.6}};
+      (data.true_markers || []).forEach(function(m) {
+        if (m.direction === 'reversal_up') { trueUp.x.push(m.time); trueUp.y.push(m.close); }
+        else if (m.direction === 'reversal_down') { trueDown.x.push(m.time); trueDown.y.push(m.close); }
+      });
+
+      Plotly.newPlot('pred-chart',
+        [candleTrace, trueUp, trueDown, predUp, predDown],
+        {
+          title: '{{ target_symbol }} {{ target_timeframe }}m — развороты',
+          margin:{t:40, b:40, l:60, r:20},
+          paper_bgcolor:'#10171d', plot_bgcolor:'#10171d',
+          font:{color:'#e8eff5'},
+          xaxis:{gridcolor:'#24323d', rangeslider:{visible:false}},
+          yaxis:{gridcolor:'#24323d', title:'Цена'},
+          legend:{bgcolor:'rgba(16,23,29,0.8)', font:{size:11}}
+        }, {responsive:true}
+      );
 
       /* PnL chart */
       var pnlTimes = data.pnl.map(function(p){return p.time});

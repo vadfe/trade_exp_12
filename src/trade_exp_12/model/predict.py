@@ -102,63 +102,60 @@ def predict_on_frame(
 
 
 def compute_signals(predictions: pd.DataFrame) -> dict:
-    """Aggregate predictions into chart-ready segments and PnL.
+    """Aggregate reversal predictions into chart-ready signals and PnL.
 
-    Returns a dict with:
-        segments: list of {start, end, direction, bars, correct_pct}
-        signals: list of {time, direction, close} — only at transitions
-        pnl: cumulative PnL series
-        stats: summary statistics
+    Signals are generated only when the model predicts reversal_up or
+    reversal_down. Between signals, position is held (long after reversal_up,
+    short after reversal_down).  PnL is computed from these position changes.
     """
     if predictions.empty:
         return {"segments": [], "signals": [], "pnl": [], "stats": {}}
 
     df = predictions.copy()
     total = len(df)
-    correct = int(df["correct"].sum())
 
-    # Find signal transitions: where pred changes from up<->down
-    df["prev_pred"] = df["label_pred_name"].shift(1)
-    df["is_signal"] = df["label_pred_name"] != df["prev_pred"]
-    # Always mark first row as a signal
-    df.iloc[0, df.columns.get_loc("is_signal")] = True
+    # True reversal bars (not hold)
+    true_reversals = df[df["label_true_name"] != "hold"]
+    pred_reversals = df[df["label_pred_name"] != "hold"]
 
-    # Build segments (contiguous runs of same prediction)
-    segments = []
+    # Signals = only bars where model predicts a reversal
     signals = []
-    seg_start = 0
-    for i in range(1, len(df) + 1):
-        if i == len(df) or df.iloc[i]["is_signal"]:
-            seg = df.iloc[seg_start:i]
-            direction = seg.iloc[0]["label_pred_name"]
-            seg_correct = int(seg["correct"].sum())
-            seg_dict = {
-                "start": _ts(seg.iloc[0]["open_time"]),
-                "end": _ts(seg.iloc[-1]["open_time"]),
-                "direction": direction,
-                "bars": len(seg),
-                "correct_pct": round(seg_correct / len(seg), 3) if len(seg) > 0 else 0,
-            }
-            segments.append(seg_dict)
-            signals.append({
-                "time": _ts(seg.iloc[0]["open_time"]),
-                "direction": direction,
-                "close": float(seg.iloc[0]["close"]),
-            })
-            if i < len(df):
-                seg_start = i
+    for _, row in pred_reversals.iterrows():
+        signals.append({
+            "time": _ts(row["open_time"]),
+            "direction": row["label_pred_name"],
+            "close": float(row["close"]),
+            "correct": bool(row["correct"]),
+        })
 
-    # Simple PnL: long when UP, short when DOWN, position changes at signals
-    # Returns are computed bar-by-bar on close prices
+    # True reversal markers for chart overlay
+    true_markers = []
+    for _, row in true_reversals.iterrows():
+        true_markers.append({
+            "time": _ts(row["open_time"]),
+            "direction": row["label_true_name"],
+            "close": float(row["close"]),
+        })
+
+    # PnL: position changes only at predicted reversals
+    # long after reversal_up, short after reversal_down, flat before first signal
     closes = df["close"].values.astype(float)
-    returns = np.diff(closes) / closes[:-1]
-    position = np.where(df["label_pred_name"].values[:-1] == "up", 1.0, -1.0)
-    strategy_returns = position * returns
-    cumulative = np.cumsum(strategy_returns)
-    cumulative = np.insert(cumulative, 0, 0.0)  # start at 0
+    position = np.zeros(len(df))
+    current_pos = 0.0  # flat until first signal
+    for i in range(len(df)):
+        pred = df.iloc[i]["label_pred_name"]
+        if pred == "reversal_up":
+            current_pos = 1.0
+        elif pred == "reversal_down":
+            current_pos = -1.0
+        position[i] = current_pos
 
-    # Buy & hold for comparison
-    bh_returns = (closes - closes[0]) / closes[0]
+    returns = np.diff(closes) / np.maximum(closes[:-1], 1e-12)
+    strategy_returns = position[:-1] * returns
+    cumulative = np.cumsum(strategy_returns)
+    cumulative = np.insert(cumulative, 0, 0.0)
+
+    bh_returns = (closes - closes[0]) / max(closes[0], 1e-12)
 
     # Downsample PnL for chart (max ~500 points)
     step = max(1, len(df) // 500)
@@ -169,7 +166,6 @@ def compute_signals(predictions: pd.DataFrame) -> dict:
             "strategy": round(float(cumulative[idx]) * 100, 2),
             "buyhold": round(float(bh_returns[idx]) * 100, 2),
         })
-    # Always include last point
     if len(df) > 0 and (len(df) - 1) % step != 0:
         pnl_points.append({
             "time": _ts(df.iloc[-1]["open_time"]),
@@ -179,26 +175,36 @@ def compute_signals(predictions: pd.DataFrame) -> dict:
 
     final_pnl = round(float(cumulative[-1]) * 100, 2)
     final_bh = round(float(bh_returns[-1]) * 100, 2)
-    n_trades = len(signals)
 
-    # Win rate on segments
-    seg_wins = sum(1 for s in segments if s["correct_pct"] > 0.5)
+    # Detection metrics on reversal bars
+    tp = int((pred_reversals["correct"] == 1).sum())
+    fp = len(pred_reversals) - tp
+    fn = len(true_reversals) - tp
+    precision = tp / max(tp + fp, 1)
+    recall = tp / max(tp + fn, 1)
+    f1 = 2 * precision * recall / max(precision + recall, 1e-9)
+    # Win rate: how many predicted signals were correct
+    win_rate = tp / max(len(pred_reversals), 1)
 
     stats = {
         "total_bars": total,
-        "correct": correct,
-        "accuracy": round(correct / max(total, 1), 4),
+        "true_reversals": len(true_reversals),
+        "pred_reversals": len(pred_reversals),
+        "tp": tp,
+        "fp": fp,
+        "fn": fn,
+        "precision": round(precision, 4),
+        "recall": round(recall, 4),
+        "f1": round(f1, 4),
+        "win_rate": round(win_rate, 4),
         "strategy_pnl_pct": final_pnl,
         "buyhold_pnl_pct": final_bh,
         "excess_pnl_pct": round(final_pnl - final_bh, 2),
-        "n_signals": n_trades,
-        "n_segments": len(segments),
-        "segment_win_rate": round(seg_wins / max(len(segments), 1), 3),
     }
 
     return {
-        "segments": segments,
         "signals": signals,
+        "true_markers": true_markers,
         "pnl": pnl_points,
         "stats": stats,
     }
