@@ -15,6 +15,7 @@ from fastapi.templating import Jinja2Templates
 
 from trade_exp_12.data.aggregate import aggregate_candles, aggregate_features
 from trade_exp_12.model.experiment import list_experiments
+from trade_exp_12.model.predict import load_model, predict_on_frame
 from trade_exp_12.reversals.zigzag import detect_atr_reversals, reversals_as_dicts
 
 logger = logging.getLogger("trade_exp_12")
@@ -459,6 +460,96 @@ def experiment_detail(request: Request, symbol: str, timeframe: str, run_id: str
             result=result,
             symbol=symbol,
             timeframe=timeframe,
+            run_id=run_id,
             epoch_data=report["epochs"],
+        ),
+    )
+
+
+@router.get("/api/predict/{symbol}/{timeframe}/{run_id}")
+def prediction_data(
+    request: Request,
+    symbol: str,
+    timeframe: str,
+    run_id: str,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    max_points: int = 2000,
+):
+    """Return model predictions aligned to candle data for charting."""
+    exp_dir = _experiment_dir(request) / symbol / timeframe / run_id
+    report_path = exp_dir / "report.json"
+    if not report_path.exists():
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    loaded = request.app.state.data_service.read_latest_processed(symbol, timeframe)
+    if loaded is None:
+        raise HTTPException(status_code=404, detail="Processed dataset not found")
+    _, frame = loaded
+
+    with open(report_path) as f:
+        report = json.load(f)
+
+    hp = report["hyperparameters"]
+    model, _ = load_model(exp_dir)
+    predictions = predict_on_frame(
+        model, frame,
+        window_size=hp["window_size"],
+        atr_multiplier=hp.get("atr_multiplier", 3.0),
+    )
+    if predictions.empty:
+        return {"points": [], "accuracy": 0, "total": 0}
+
+    if start is not None:
+        predictions = predictions[predictions["open_time"] >= start]
+    if end is not None:
+        predictions = predictions[predictions["open_time"] <= end]
+
+    # Downsample for chart display
+    step = max(1, len(predictions) // max(100, min(max_points, 5000)))
+    sampled = predictions.iloc[::step].reset_index(drop=True)
+
+    total = len(predictions)
+    correct = int(predictions["correct"].sum())
+
+    return {
+        "total": total,
+        "correct": correct,
+        "accuracy": round(correct / max(total, 1), 4),
+        "step": step,
+        "points": [
+            {
+                "time": row["open_time"].isoformat()
+                if hasattr(row["open_time"], "isoformat")
+                else str(row["open_time"]),
+                "close": float(row["close"]),
+                "true": row["label_true_name"],
+                "pred": row["label_pred_name"],
+                "prob_up": round(float(row["prob_up"]), 3),
+                "prob_down": round(float(row["prob_down"]), 3),
+                "correct": bool(row["correct"]),
+            }
+            for _, row in sampled.iterrows()
+        ],
+    }
+
+
+@router.get("/predict/{symbol}/{timeframe}/{run_id}")
+def predictions_page(request: Request, symbol: str, timeframe: str, run_id: str):
+    exp_dir = _experiment_dir(request) / symbol / timeframe / run_id
+    report_path = exp_dir / "report.json"
+    if not report_path.exists():
+        raise HTTPException(status_code=404, detail="Experiment not found")
+    with open(report_path) as f:
+        report = json.load(f)
+    return templates.TemplateResponse(
+        request,
+        "predictions.html",
+        context(
+            request,
+            symbol=symbol,
+            timeframe=timeframe,
+            run_id=run_id,
+            report=report,
         ),
     )

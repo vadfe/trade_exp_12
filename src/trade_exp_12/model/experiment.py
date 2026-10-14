@@ -52,6 +52,7 @@ def run_experiment(
         n_layers=n_layers,
         d_ff=d_ff,
         dropout=dropout,
+        atr_multiplier=atr_multiplier,
         progress_callback=progress_callback,
     )
     return result

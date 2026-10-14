@@ -66,6 +66,11 @@
 </section>
 
 <section class="panel">
+  <a class="button" href="/predict/{{ symbol }}/{{ timeframe }}/{{ run_id }}">Предсказания на графике</a>
+  <a class="button" href="/experiments" style="margin-left:12px">Все эксперименты</a>
+</section>
+
+<section class="panel">
   <h2>Гиперпараметры</h2>
   <table style="max-width:500px">
     {% for key, val in result.hyperparameters.items() %}

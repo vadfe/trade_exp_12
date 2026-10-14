@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %}Предсказания {{ symbol }} {{ timeframe }}m — Trade Experiment 12{% endblock %}
+{% block head %}
+<script src="/vendor/plotly.min.js?v=6.3.0"></script>
+{% endblock %}
+{% block content %}
+<section class="hero">
+  <div>
+    <span class="eyebrow">Прогон модели</span>
+    <h1>{{ symbol }} · {{ timeframe }}m</h1>
+    <p>Эксперимент {{ run_id }} · окно {{ report.hyperparameters.window_size }} · test_acc={{ "%.1f"|format(report.test_accuracy * 100) }}%</p>
+  </div>
+  <div class="metric" id="live-acc"><b>—</b><span>accuracy на видимом</span></div>
+</section>
+
+<section class="panel">
+  <h2>Легенда</h2>
+  <div style="display:flex;gap:24px;flex-wrap:wrap;font-size:13px">
+    <span><b style="color:#26a69a">&#9650;</b> предсказание UP (верно)</span>
+    <span><b style="color:#ef5350">&#9660;</b> предсказание DOWN (верно)</span>
+    <span><b style="color:#666">&#215;</b> неверное предсказание</span>
+    <span style="color:#888">серый фон = test split</span>
+  </div>
+</section>
+
+<section class="panel">
+  <div id="pred-chart" style="height:610px;min-height:610px"></div>
+</section>
+
+<section class="panel">
+  <h2>Статистика по всему набору</h2>
+  <div id="stats" style="display:flex;gap:32px;flex-wrap:wrap">
+    <div class="metric"><b id="st-total">—</b><span>всего точек</span></div>
+    <div class="metric"><b id="st-correct">—</b><span>верных</span></div>
+    <div class="metric"><b id="st-acc">—</b><span>accuracy</span></div>
+  </div>
+</section>
+
+<section class="panel">
+  <a class="button" href="/experiment/{{ symbol }}/{{ timeframe }}/{{ run_id }}">Назад к эксперименту</a>
+  <a class="button" href="/experiments" style="margin-left:12px">Все эксперименты</a>
+</section>
+
+<script>
+(function() {
+  var apiUrl = '/api/predict/{{ symbol }}/{{ timeframe }}/{{ run_id }}';
+  var candleUrl = '/api/data/{{ symbol }}/{{ timeframe }}/candles';
+  var hp = {{ report.hyperparameters|tojson }};
+  var split = {{ report.split|tojson }};
+  var totalWindows = split.train_size + split.val_size + split.test_size;
+  /* test split starts after train+val */
+  var testStartFrac = (split.train_size + split.val_size) / totalWindows;
+
+  Promise.all([
+    fetch(candleUrl).then(r => r.json()),
+    fetch(apiUrl + '?max_points=3000').then(r => r.json())
+  ]).then(function(results) {
+    var candles = results[0];
+    var pred = results[1];
+
+    document.getElementById('st-total').textContent = pred.total.toLocaleString();
+    document.getElementById('st-correct').textContent = pred.correct.toLocaleString();
+    document.getElementById('st-acc').textContent = (pred.accuracy * 100).toFixed(1) + '%';
+    document.getElementById('live-acc').querySelector('b').textContent =
+      (pred.accuracy * 100).toFixed(1) + '%';
+
+    /* candle trace */
+    var candleTrace = {
+      x: candles.time, open: candles.open, high: candles.high,
+      low: candles.low, close: candles.close,
+      type: 'candlestick', name: 'OHLC',
+      increasing: {line:{color:'#26a69a'}},
+      decreasing: {line:{color:'#ef5350'}}
+    };
+
+    /* separate correct predictions by direction */
+    var upOk = {x:[], y:[], name:'UP верно', mode:'markers', type:'scatter',
+      marker:{symbol:'triangle-up', size:10, color:'#26a69a'}};
+    var downOk = {x:[], y:[], name:'DOWN верно', mode:'markers', type:'scatter',
+      marker:{symbol:'triangle-down', size:10, color:'#ef5350'}};
+    var wrong = {x:[], y:[], name:'Неверно', mode:'markers', type:'scatter',
+      marker:{symbol:'x', size:8, color:'#888', line:{width:2, color:'#888'}}};
+
+    pred.points.forEach(function(p) {
+      if (p.correct) {
+        if (p.pred === 'up') { upOk.x.push(p.time); upOk.y.push(p.close); }
+        else if (p.pred === 'down') { downOk.x.push(p.time); downOk.y.push(p.close); }
+      } else {
+        wrong.x.push(p.time);
+        wrong.y.push(p.close);
+      }
+    });
+
+    /* test split boundary */
+    var shapes = [];
+    if (pred.points.length > 0) {
+      var testIdx = Math.floor(pred.points.length * testStartFrac);
+      if (testIdx > 0 && testIdx < pred.points.length) {
+        var testTime = pred.points[testIdx].time;
+        shapes.push({
+          type:'line', x0:testTime, x1:testTime,
+          y0:0, y1:1, yref:'paper',
+          line:{color:'#f0b35a', width:2, dash:'dash'},
+        });
+      }
+    }
+
+    var layout = {
+      title: 'Предсказания модели на графике',
+      margin:{t:40, b:40, l:60, r:20},
+      paper_bgcolor:'#10171d', plot_bgcolor:'#10171d',
+      font:{color:'#e8eff5'},
+      xaxis:{gridcolor:'#24323d', rangeslider:{visible:false}},
+      yaxis:{gridcolor:'#24323d', title:'Цена'},
+      shapes: shapes,
+      legend:{bgcolor:'rgba(16,23,29,0.8)', font:{size:11}},
+      annotations: shapes.length > 0 ? [{
+        x: shapes[0].x0, y: 1.02, yref:'paper',
+        text:'test split >', showarrow:false,
+        font:{color:'#f0b35a', size:11}
+      }] : []
+    };
+
+    Plotly.newPlot('pred-chart',
+      [candleTrace, upOk, downOk, wrong],
+      layout, {responsive:true}
+    );
+  });
+})();
+</script>
+{% endblock %}

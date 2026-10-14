@@ -98,6 +98,7 @@ def train(
     n_layers: int = 4,
     d_ff: int = 256,
     dropout: float = 0.1,
+    atr_multiplier: float = 3.0,
     progress_callback=None,
 ) -> TrainResult:
     """Train the MarketTransformer and return metrics.
@@ -214,6 +215,7 @@ def train(
             "batch_size": batch_size,
             "epochs": epochs,
             "window_size": window_size,
+            "atr_multiplier": atr_multiplier,
         },
     }
     with open(output_dir / "report.json", "w") as f:
