@@ -595,3 +595,233 @@ def predictions_page(
             available_predictions=available,
         ),
     )
+
+
+# --- v2: MAE Pretrain / Finetune routes ---
+
+
+def _pretrain_dir(request: Request) -> Path:
+    return request.app.state.config.root / "data" / "pretrain"
+
+
+def _experiments_v2_dir(request: Request) -> Path:
+    return request.app.state.config.root / "data" / "experiments_v2"
+
+
+@router.get("/v2/experiments")
+def experiments_v2_page(request: Request):
+    """v2 experiments: MAE pretrain + finetune."""
+    pretrain_root = _pretrain_dir(request)
+    pretrain_runs = []
+    if pretrain_root.exists():
+        for run_dir in sorted(pretrain_root.iterdir()):
+            report_path = run_dir / "report.json"
+            if report_path.exists():
+                with open(report_path) as f:
+                    report = json.load(f)
+                pretrain_runs.append({
+                    "run_id": run_dir.name,
+                    "info": report.get("info", {}),
+                    "best_val_loss": report.get("best_val_loss"),
+                    "hyperparameters": report.get("hyperparameters", {}),
+                    "path": str(run_dir),
+                })
+
+    exp_root = _experiments_v2_dir(request)
+    finetune_runs = []
+    if exp_root.exists():
+        for sym_dir in sorted(exp_root.iterdir()):
+            if not sym_dir.is_dir():
+                continue
+            for tf_dir in sorted(sym_dir.iterdir()):
+                if not tf_dir.is_dir():
+                    continue
+                for run_dir in sorted(tf_dir.iterdir()):
+                    report_path = run_dir / "report.json"
+                    if report_path.exists():
+                        with open(report_path) as f:
+                            report = json.load(f)
+                        finetune_runs.append({
+                            "symbol": sym_dir.name,
+                            "timeframe": tf_dir.name,
+                            "run_id": run_dir.name,
+                            "test_accuracy": report.get("test_accuracy"),
+                            "test_per_class": report.get("test_per_class", {}),
+                            "encoder_path": report.get("encoder_path", ""),
+                            "hyperparameters": report.get("hyperparameters", {}),
+                            "path": str(run_dir),
+                        })
+
+    return templates.TemplateResponse(
+        request,
+        "experiments_v2.html",
+        context(
+            request,
+            pretrain_runs=pretrain_runs,
+            finetune_runs=finetune_runs,
+        ),
+    )
+
+
+@router.post("/v2/pretrain/run")
+async def start_pretrain(
+    request: Request,
+    window_size: int = Form(64),
+    epochs: int = Form(50),
+    mask_ratio: float = Form(0.4),
+    d_model: int = Form(64),
+    n_encoder_layers: int = Form(4),
+    n_decoder_layers: int = Form(2),
+    d_ff: int = Form(256),
+    lr: float = Form(0.001),
+    batch_size: int = Form(256),
+):
+    """Launch MAE pretraining on all available processed pairs."""
+    registry = request.app.state.registry
+    settings = request.app.state.config.settings
+
+    # Collect all processed parquets
+    parquet_paths = []
+    for symbol in settings.universe.symbols:
+        for timeframe in settings.universe.timeframes:
+            rec = registry.latest_processed(symbol, timeframe)
+            if rec is not None:
+                p = rec["path"]
+                if not Path(p).is_absolute():
+                    p = str(request.app.state.config.root / p)
+                parquet_paths.append(p)
+
+    if not parquet_paths:
+        raise HTTPException(status_code=404, detail="No processed datasets found")
+
+    from datetime import UTC as _UTC
+    stamp = datetime.now(_UTC).strftime("%Y%m%dT%H%M%S")
+    output_dir = _pretrain_dir(request) / stamp
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    job_id = registry.create_job("pretrain_v2", "ALL", "ALL")
+    db_path = str(registry.path)
+
+    cmd = [
+        sys.executable, "-m", "trade_exp_12.model.run_pretrain",
+        "--parquets", *parquet_paths,
+        "--output-dir", str(output_dir),
+        "--db", db_path,
+        "--job-id", str(job_id),
+        "--window-size", str(max(16, min(window_size, 256))),
+        "--epochs", str(max(1, min(epochs, 500))),
+        "--mask-ratio", str(max(0.1, min(mask_ratio, 0.8))),
+        "--d-model", str(max(16, min(d_model, 512))),
+        "--n-encoder-layers", str(max(1, min(n_encoder_layers, 12))),
+        "--n-decoder-layers", str(max(1, min(n_decoder_layers, 6))),
+        "--d-ff", str(max(64, min(d_ff, 2048))),
+        "--lr", str(max(1e-5, min(lr, 0.1))),
+        "--batch-size", str(max(32, min(batch_size, 2048))),
+    ]
+
+    env = {**__import__("os").environ, "SMC_CREDIT": "0"}
+    subprocess.Popen(cmd, env=env, cwd=str(request.app.state.config.root))
+    logger.info("Spawned MAE pretrain subprocess (job %d), %d parquets", job_id, len(parquet_paths))
+    return RedirectResponse(f"/jobs/{job_id}", status_code=303)
+
+
+@router.post("/v2/finetune/run")
+async def start_finetune(
+    request: Request,
+    pretrain_run_id: str = Form(...),
+    symbol: str = Form(...),
+    timeframe: str = Form(...),
+    epochs: int = Form(30),
+    lr: float = Form(0.0003),
+    freeze_encoder: bool = Form(True),
+):
+    """Launch finetuning of pretrained encoder on one pair."""
+    pretrain_root = _pretrain_dir(request) / pretrain_run_id
+    encoder_path = pretrain_root / "encoder.pt"
+    if not encoder_path.exists():
+        raise HTTPException(status_code=404, detail="Pretrained encoder not found")
+
+    # Read pretrain hyperparams to match architecture
+    with open(pretrain_root / "report.json") as f:
+        pt_report = json.load(f)
+    pt_hp = pt_report["hyperparameters"]
+
+    registry = request.app.state.registry
+    processed = registry.latest_processed(symbol, timeframe)
+    if processed is None:
+        raise HTTPException(status_code=404, detail="Processed dataset not found")
+    parquet_path = processed["path"]
+    if not Path(parquet_path).is_absolute():
+        parquet_path = str(request.app.state.config.root / parquet_path)
+
+    from datetime import UTC as _UTC
+    stamp = datetime.now(_UTC).strftime("%Y%m%dT%H%M%S")
+    output_dir = _experiments_v2_dir(request) / symbol / timeframe / stamp
+
+    job_id = registry.create_job("finetune_v2", symbol, timeframe)
+    db_path = str(registry.path)
+
+    cmd = [
+        sys.executable, "-m", "trade_exp_12.model.run_finetune",
+        "--encoder-path", str(encoder_path),
+        "--parquet", parquet_path,
+        "--symbol", symbol,
+        "--timeframe", timeframe,
+        "--output-dir", str(output_dir),
+        "--db", db_path,
+        "--job-id", str(job_id),
+        "--window-size", str(pt_hp["window_size"]),
+        "--d-model", str(pt_hp["d_model"]),
+        "--n-encoder-layers", str(pt_hp["n_encoder_layers"]),
+        "--n-decoder-layers", str(pt_hp["n_decoder_layers"]),
+        "--d-ff", str(pt_hp["d_ff"]),
+        "--mask-ratio", str(pt_hp["mask_ratio"]),
+        "--epochs", str(max(1, min(epochs, 200))),
+        "--lr", str(max(1e-5, min(lr, 0.1))),
+    ]
+    if freeze_encoder:
+        cmd.append("--freeze-encoder")
+    else:
+        cmd.append("--unfreeze-encoder")
+
+    env = {**__import__("os").environ, "SMC_CREDIT": "0"}
+    subprocess.Popen(cmd, env=env, cwd=str(request.app.state.config.root))
+    logger.info(
+        "Spawned finetune subprocess: %s/%sm encoder=%s (job %d)",
+        symbol, timeframe, pretrain_run_id, job_id,
+    )
+    return RedirectResponse(f"/jobs/{job_id}", status_code=303)
+
+
+@router.get("/v2/pretrain/{run_id}")
+def pretrain_detail(request: Request, run_id: str):
+    """Pretrain result detail page."""
+    report_path = _pretrain_dir(request) / run_id / "report.json"
+    if not report_path.exists():
+        raise HTTPException(status_code=404, detail="Pretrain run not found")
+    with open(report_path) as f:
+        report = json.load(f)
+    return templates.TemplateResponse(
+        request,
+        "pretrain_detail.html",
+        context(request, report=report, run_id=run_id),
+    )
+
+
+@router.get("/v2/experiment/{symbol}/{timeframe}/{run_id}")
+def finetune_detail(request: Request, symbol: str, timeframe: str, run_id: str):
+    """Finetune result detail page."""
+    exp_dir = _experiments_v2_dir(request) / symbol / timeframe / run_id
+    report_path = exp_dir / "report.json"
+    if not report_path.exists():
+        raise HTTPException(status_code=404, detail="Finetune run not found")
+    with open(report_path) as f:
+        report = json.load(f)
+    return templates.TemplateResponse(
+        request,
+        "finetune_detail.html",
+        context(
+            request, report=report,
+            symbol=symbol, timeframe=timeframe, run_id=run_id,
+        ),
+    )

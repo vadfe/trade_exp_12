@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}MAE v2 — Trade Experiment 12{% endblock %}
+{% block content %}
+<section class="hero">
+  <div>
+    <span class="eyebrow">v2 — Representation Learning</span>
+    <h1>MAE Pretrain + Finetune</h1>
+    <p>Masked Autoencoder: self-supervised pretraining on all pairs, then finetune classification head</p>
+  </div>
+</section>
+
+<!-- PRETRAIN SECTION -->
+<section class="panel">
+  <h2>1. Pretrain encoder (MAE)</h2>
+  <p>Trains on ALL processed pairs. Masks random timesteps, reconstructs features. No labels needed.</p>
+  <form method="post" action="/v2/pretrain/run" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+    <label>Window <input type="number" name="window_size" value="64" min="16" max="256" style="width:70px"></label>
+    <label>Epochs <input type="number" name="epochs" value="50" min="1" max="500" style="width:70px"></label>
+    <label>Mask ratio <input type="number" name="mask_ratio" value="0.4" step="0.05" min="0.1" max="0.8" style="width:70px"></label>
+    <label>d_model <input type="number" name="d_model" value="64" min="16" max="512" style="width:70px"></label>
+    <label>Enc layers <input type="number" name="n_encoder_layers" value="4" min="1" max="12" style="width:70px"></label>
+    <label>Dec layers <input type="number" name="n_decoder_layers" value="2" min="1" max="6" style="width:70px"></label>
+    <label>d_ff <input type="number" name="d_ff" value="256" min="64" max="2048" style="width:80px"></label>
+    <label>LR <input type="number" name="lr" value="0.001" step="0.0001" min="0.0001" max="0.1" style="width:90px"></label>
+    <label>Batch <input type="number" name="batch_size" value="256" min="32" max="2048" style="width:80px"></label>
+    <button type="submit">Pretrain</button>
+  </form>
+</section>
+
+{% if pretrain_runs %}
+<section class="panel">
+  <h2>Pretrained encoders</h2>
+  <table>
+    <thead><tr><th>Run ID</th><th>Pairs</th><th>Windows</th><th>Best Val Loss</th><th>Epochs</th><th>d_model</th><th>Mask</th><th></th></tr></thead>
+    <tbody>
+    {% for run in pretrain_runs %}
+    <tr>
+      <td><small>{{ run.run_id }}</small></td>
+      <td>{{ run.info.get('n_pairs', '?') }}</td>
+      <td>{{ "{:,}".format(run.info.get('total_windows', 0)) }}</td>
+      <td><b>{{ "%.5f"|format(run.best_val_loss) }}</b></td>
+      <td>{{ run.hyperparameters.get('epochs', '?') }}</td>
+      <td>{{ run.hyperparameters.get('d_model', '?') }}</td>
+      <td>{{ run.hyperparameters.get('mask_ratio', '?') }}</td>
+      <td><a class="button" href="/v2/pretrain/{{ run.run_id }}">Details</a></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<!-- FINETUNE SECTION -->
+{% if pretrain_runs %}
+<section class="panel">
+  <h2>2. Finetune on target pair</h2>
+  <p>Freeze pretrained encoder, train classification head (reversal_up / reversal_down / hold).</p>
+  <form method="post" action="/v2/finetune/run" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+    <label>Encoder <select name="pretrain_run_id">
+      {% for run in pretrain_runs %}<option value="{{ run.run_id }}">{{ run.run_id }} (loss={{ "%.5f"|format(run.best_val_loss) }})</option>{% endfor %}
+    </select></label>
+    <label>Pair <select name="symbol">
+      {% for s in config.universe.symbols %}<option>{{ s }}</option>{% endfor %}
+    </select></label>
+    <label>TF <select name="timeframe">
+      {% for t in config.universe.timeframes %}<option>{{ t }}</option>{% endfor %}
+    </select></label>
+    <label>Epochs <input type="number" name="epochs" value="30" min="1" max="200" style="width:70px"></label>
+    <label>LR <input type="number" name="lr" value="0.0003" step="0.0001" min="0.0001" max="0.1" style="width:90px"></label>
+    <label>Freeze encoder <select name="freeze_encoder"><option value="true" selected>Yes</option><option value="false">No</option></select></label>
+    <button type="submit">Finetune</button>
+  </form>
+</section>
+{% endif %}
+
+{% if finetune_runs %}
+<section class="panel">
+  <h2>Finetune results</h2>
+  <table>
+    <thead><tr><th>Pair</th><th>TF</th><th>Run ID</th><th>Test Acc</th><th>Hold</th><th>Rev Up</th><th>Rev Down</th><th></th></tr></thead>
+    <tbody>
+    {% for run in finetune_runs %}
+    <tr>
+      <td>{{ run.symbol }}</td>
+      <td>{{ run.timeframe }}m</td>
+      <td><small>{{ run.run_id }}</small></td>
+      <td><b>{{ "%.1f"|format(run.test_accuracy * 100) }}%</b></td>
+      <td>{{ "%.1f"|format(run.test_per_class.get('hold', 0) * 100) }}%</td>
+      <td>{{ "%.1f"|format(run.test_per_class.get('reversal_up', 0) * 100) }}%</td>
+      <td>{{ "%.1f"|format(run.test_per_class.get('reversal_down', 0) * 100) }}%</td>
+      <td><a class="button" href="/v2/experiment/{{ run.symbol }}/{{ run.timeframe }}/{{ run.run_id }}">Details</a></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if not pretrain_runs and not finetune_runs %}
+<section class="panel"><p class="muted">No v2 experiments yet. Start with pretraining above.</p></section>
+{% endif %}
+{% endblock %}

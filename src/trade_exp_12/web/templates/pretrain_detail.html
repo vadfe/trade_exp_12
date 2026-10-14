@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Pretrain {{ run_id }} — Trade Experiment 12{% endblock %}
+{% block head %}<script src="/vendor/plotly.min.js"></script>{% endblock %}
+{% block content %}
+<section class="hero">
+  <div>
+    <span class="eyebrow">MAE Pretrain</span>
+    <h1>{{ run_id }}</h1>
+  </div>
+  <div class="metric"><b>{{ "%.5f"|format(report.best_val_loss) }}</b><span>best val loss</span></div>
+</section>
+
+<section class="panel">
+  <h2>Hyperparameters</h2>
+  <table>
+    <tbody>
+    {% for k, v in report.hyperparameters.items() %}
+    <tr><td>{{ k }}</td><td><b>{{ v }}</b></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel">
+  <h2>Data</h2>
+  <table>
+    <tbody>
+    <tr><td>Total windows</td><td><b>{{ "{:,}".format(report.info.total_windows) }}</b></td></tr>
+    <tr><td>Pairs</td><td><b>{{ report.info.n_pairs }}</b></td></tr>
+    <tr><td>Features</td><td><b>{{ report.info.feature_count }}</b></td></tr>
+    {% for pair in report.info.pairs %}
+    <tr><td>Pair {{ loop.index }}</td><td>{{ pair }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel">
+  <h2>Training curve</h2>
+  <div id="loss-chart" style="height:400px"></div>
+</section>
+
+<script>
+var epochs = {{ report.epochs | tojson }};
+var x = epochs.map(e => e.epoch);
+Plotly.newPlot('loss-chart', [
+  {x: x, y: epochs.map(e => e.train_loss), name: 'Train Loss', type: 'scatter'},
+  {x: x, y: epochs.map(e => e.val_loss), name: 'Val Loss', type: 'scatter'},
+], {
+  xaxis: {title: 'Epoch'},
+  yaxis: {title: 'MSE Loss'},
+  template: 'plotly_dark',
+  margin: {t: 30},
+});
+</script>
+{% endblock %}

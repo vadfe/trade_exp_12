@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Finetune {{ symbol }} {{ timeframe }}m — Trade Experiment 12{% endblock %}
+{% block head %}<script src="/vendor/plotly.min.js"></script>{% endblock %}
+{% block content %}
+<section class="hero">
+  <div>
+    <span class="eyebrow">MAE Finetune</span>
+    <h1>{{ symbol }} / {{ timeframe }}m</h1>
+    <p>Run: {{ run_id }}</p>
+  </div>
+  <div class="metric"><b>{{ "%.1f"|format(report.test_accuracy * 100) }}%</b><span>test accuracy</span></div>
+</section>
+
+<section class="panel">
+  <h2>Test per-class accuracy</h2>
+  <table>
+    <thead><tr><th>Class</th><th>Accuracy</th></tr></thead>
+    <tbody>
+    {% for cls, acc in report.test_per_class.items() %}
+    <tr><td>{{ cls }}</td><td><b>{{ "%.1f"|format(acc * 100) }}%</b></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel">
+  <h2>Confusion matrix (test)</h2>
+  <table>
+    <thead><tr><th></th><th>pred hold</th><th>pred rev_up</th><th>pred rev_down</th></tr></thead>
+    <tbody>
+    {% set labels = ['hold', 'reversal_up', 'reversal_down'] %}
+    {% for row in report.test_confusion %}
+    <tr><td><b>true {{ labels[loop.index0] }}</b></td>{% for v in row %}<td>{{ v }}</td>{% endfor %}</tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel">
+  <h2>Hyperparameters</h2>
+  <table>
+    <tbody>
+    {% for k, v in report.hyperparameters.items() %}
+    <tr><td>{{ k }}</td><td><b>{{ v }}</b></td></tr>
+    {% endfor %}
+    <tr><td>encoder</td><td><small>{{ report.encoder_path }}</small></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="panel">
+  <h2>Training curve</h2>
+  <div id="loss-chart" style="height:300px"></div>
+  <div id="acc-chart" style="height:300px"></div>
+</section>
+
+<script>
+var epochs = {{ report.epochs | tojson }};
+var x = epochs.map(e => e.epoch);
+Plotly.newPlot('loss-chart', [
+  {x: x, y: epochs.map(e => e.train_loss), name: 'Train Loss', type: 'scatter'},
+  {x: x, y: epochs.map(e => e.val_loss), name: 'Val Loss', type: 'scatter'},
+], {xaxis: {title: 'Epoch'}, yaxis: {title: 'Loss'}, template: 'plotly_dark', margin: {t: 30}});
+
+Plotly.newPlot('acc-chart', [
+  {x: x, y: epochs.map(e => e.train_accuracy), name: 'Train Acc', type: 'scatter'},
+  {x: x, y: epochs.map(e => e.val_accuracy), name: 'Val Acc', type: 'scatter'},
+], {xaxis: {title: 'Epoch'}, yaxis: {title: 'Accuracy'}, template: 'plotly_dark', margin: {t: 30}});
+</script>
+{% endblock %}
