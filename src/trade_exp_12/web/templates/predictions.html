@@ -139,10 +139,21 @@
     document.getElementById('st-excess').textContent = st.excess_pnl_pct.toFixed(1);
 
     fetch(candleUrl + '?max_points=100000').then(function(r){return r.json()}).then(function(candles) {
-      /* Initial zoom: last 500 candles */
       var nCandles = candles.time.length;
-      var initStart = nCandles > 500 ? candles.time[nCandles - 500] : candles.time[0];
-      var initEnd = candles.time[nCandles - 1];
+      /* Show last 500 candles initially */
+      var viewStart = Math.max(0, nCandles - 500);
+
+      /* Compute Y range from visible candles */
+      function yRange(startIdx, endIdx) {
+        var lo = Infinity, hi = -Infinity;
+        for (var i = startIdx; i < endIdx && i < nCandles; i++) {
+          if (candles.low[i] < lo) lo = candles.low[i];
+          if (candles.high[i] > hi) hi = candles.high[i];
+        }
+        var pad = (hi - lo) * 0.08;
+        return [lo - pad, hi + pad];
+      }
+      var initYR = yRange(viewStart, nCandles);
 
       var candleTrace = {
         x: candles.time, open: candles.open, high: candles.high,
@@ -152,9 +163,10 @@
         decreasing: {line:{color:'#ef5350'}}
       };
 
-      /* True reversals as a zigzag line (not individual markers) */
-      var zigzag = {x:[], y:[], name:'Реальные развороты', mode:'lines+markers',
-        type:'scatter', line:{color:'#f0b35a', width:1.5, dash:'dot'},
+      /* True reversals as a zigzag line */
+      var zigzag = {x:[], y:[], name:'Реальные развороты',
+        mode:'lines+markers', type:'scatter',
+        line:{color:'#f0b35a', width:1.5, dash:'dot'},
         marker:{size:5, color:'#f0b35a'}};
       (data.true_markers || []).forEach(function(m) {
         zigzag.x.push(m.time);
@@ -162,12 +174,12 @@
       });
 
       /* Predicted signals as markers */
-      var predUp = {x:[], y:[], name:'Pred UP', mode:'markers', type:'scatter',
-        marker:{symbol:'triangle-up', size:12, color:'#26a69a',
-                line:{width:1, color:'#fff'}}};
-      var predDown = {x:[], y:[], name:'Pred DOWN', mode:'markers', type:'scatter',
-        marker:{symbol:'triangle-down', size:12, color:'#ef5350',
-                line:{width:1, color:'#fff'}}};
+      var predUp = {x:[], y:[], name:'Pred UP', mode:'markers',
+        type:'scatter', marker:{symbol:'triangle-up', size:12,
+        color:'#26a69a', line:{width:1, color:'#fff'}}};
+      var predDown = {x:[], y:[], name:'Pred DOWN', mode:'markers',
+        type:'scatter', marker:{symbol:'triangle-down', size:12,
+        color:'#ef5350', line:{width:1, color:'#fff'}}};
       data.signals.forEach(function(s) {
         if (s.direction === 'reversal_up') {
           predUp.x.push(s.time); predUp.y.push(s.close);
@@ -176,7 +188,8 @@
         }
       });
 
-      Plotly.newPlot('pred-chart',
+      var chartDiv = document.getElementById('pred-chart');
+      Plotly.newPlot(chartDiv,
         [candleTrace, zigzag, predUp, predDown],
         {
           title: '{{ target_symbol }} {{ target_timeframe }}m — развороты',
@@ -184,11 +197,35 @@
           paper_bgcolor:'#10171d', plot_bgcolor:'#10171d',
           font:{color:'#e8eff5'},
           xaxis:{gridcolor:'#24323d', rangeslider:{visible:false},
-                 range:[initStart, initEnd]},
-          yaxis:{gridcolor:'#24323d', title:'Цена', autorange:true},
+                 range:[candles.time[viewStart], candles.time[nCandles-1]]},
+          yaxis:{gridcolor:'#24323d', title:'Цена',
+                 range:initYR, fixedrange:false},
           legend:{bgcolor:'rgba(16,23,29,0.8)', font:{size:11}}
         }, {responsive:true}
       );
+
+      /* Re-scale Y axis when the user zooms or pans */
+      chartDiv.on('plotly_relayout', function(evt) {
+        var xr = evt['xaxis.range'] || [
+          evt['xaxis.range[0]'], evt['xaxis.range[1]']
+        ];
+        if (!xr || !xr[0] || !xr[1]) return;
+        var x0 = new Date(xr[0]).getTime();
+        var x1 = new Date(xr[1]).getTime();
+        var lo = Infinity, hi = -Infinity;
+        for (var i = 0; i < nCandles; i++) {
+          var t = new Date(candles.time[i]).getTime();
+          if (t < x0 || t > x1) continue;
+          if (candles.low[i] < lo) lo = candles.low[i];
+          if (candles.high[i] > hi) hi = candles.high[i];
+        }
+        if (lo < Infinity) {
+          var pad = (hi - lo) * 0.08;
+          Plotly.relayout(chartDiv, {
+            'yaxis.range': [lo - pad, hi + pad]
+          });
+        }
+      });
 
       /* PnL chart */
       var pnlTimes = data.pnl.map(function(p){return p.time});
