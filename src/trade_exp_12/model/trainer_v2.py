@@ -305,11 +305,21 @@ def finetune(
     state = torch.load(encoder_path, map_location=device, weights_only=True)
     model.load_state_dict(state, strict=False)
 
-    # Freeze encoder if requested
+    # Freeze encoder: keep last 2 encoder layers + head trainable
     if freeze_encoder:
-        for name, param in model.named_parameters():
-            if not name.startswith("head"):
-                param.requires_grad = False
+        # Freeze everything first
+        for param in model.parameters():
+            param.requires_grad = False
+        # Unfreeze head always
+        for param in model.head.parameters():
+            param.requires_grad = True
+        # Unfreeze last 2 encoder layers for adaptation
+        n_layers = len(model.encoder.layers)
+        for i in range(max(0, n_layers - 2), n_layers):
+            for param in model.encoder.layers[i].parameters():
+                param.requires_grad = True
+        # Unfreeze cls_token (important for classification)
+        model.cls_token.requires_grad = True
 
     class_weights = compute_class_weights(train_ds).to(device)
     criterion = nn.CrossEntropyLoss(weight=class_weights)
