@@ -95,13 +95,21 @@
   var testStartFrac = (split.train_size + split.val_size) / totalWindows;
   var statusPanel = document.getElementById('status-panel');
   var statusMsg = document.getElementById('status-msg');
+  var pollStart = Date.now();
+  var POLL_TIMEOUT = 180000; /* 3 minutes */
 
   function pollPredictions() {
     fetch(predUrl).then(function(r){return r.json()}).then(function(data) {
       if (data.status === 'computing') {
+        var elapsed = Math.round((Date.now() - pollStart) / 1000);
+        if (Date.now() - pollStart > POLL_TIMEOUT) {
+          statusPanel.style.display = '';
+          statusMsg.textContent = 'Расчёт не завершился за 3 минуты. Проверьте консоль сервера.';
+          return;
+        }
         statusPanel.style.display = '';
-        statusMsg.textContent = 'Рассчитываю предсказания... Обновляю через 5 секунд.';
-        setTimeout(pollPredictions, 5000);
+        statusMsg.textContent = 'Рассчитываю предсказания... ' + elapsed + ' сек.';
+        setTimeout(pollPredictions, 3000);
         return;
       }
       statusPanel.style.display = 'none';

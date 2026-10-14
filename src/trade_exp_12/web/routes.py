@@ -547,6 +547,31 @@ def predictions_page(
     t_sym = target_symbol or model_symbol
     t_tf = target_timeframe or model_timeframe
 
+    # Auto-launch prediction if not cached yet
+    pred_path = exp_dir / f"predictions_{t_sym}_{t_tf}.json"
+    if not pred_path.exists():
+        registry = request.app.state.registry
+        processed = registry.latest_processed(t_sym, t_tf)
+        if processed is not None:
+            parquet_path = processed["path"]
+            if not Path(parquet_path).is_absolute():
+                parquet_path = str(request.app.state.config.root / parquet_path)
+            cmd = [
+                sys.executable, "-m", "trade_exp_12.model.run_predict",
+                "--experiment-dir", str(exp_dir),
+                "--parquet", parquet_path,
+                "--target-symbol", t_sym,
+                "--target-timeframe", t_tf,
+            ]
+            env = {**__import__("os").environ, "SMC_CREDIT": "0"}
+            subprocess.Popen(
+                cmd, env=env, cwd=str(request.app.state.config.root),
+            )
+            logger.info(
+                "Auto-launched prediction: %s/%sm on model %s/%sm/%s",
+                t_sym, t_tf, model_symbol, model_timeframe, run_id,
+            )
+
     # Check which predictions are already computed
     available = []
     if exp_dir.exists():
