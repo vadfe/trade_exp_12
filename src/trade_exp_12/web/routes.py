@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -11,8 +14,10 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from trade_exp_12.data.aggregate import aggregate_candles, aggregate_features
-from trade_exp_12.model.experiment import list_experiments, run_experiment
+from trade_exp_12.model.experiment import list_experiments
 from trade_exp_12.reversals.zigzag import detect_atr_reversals, reversals_as_dicts
+
+logger = logging.getLogger("trade_exp_12")
 
 router = APIRouter()
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
@@ -381,51 +386,39 @@ async def start_experiment(
     n_layers: int = Form(4),
     lr: float = Form(0.001),
 ):
-    loaded = request.app.state.data_service.read_latest_processed(symbol, timeframe)
-    if loaded is None:
-        raise HTTPException(status_code=404, detail="Processed dataset not found")
-    _, frame = loaded
-
     registry = request.app.state.registry
+    processed_record = registry.latest_processed(symbol, timeframe)
+    if processed_record is None:
+        raise HTTPException(status_code=404, detail="Processed dataset not found")
+
     job_id = registry.create_job("experiment", symbol, timeframe)
     exp_dir = _experiment_dir(request)
 
-    async def _run():
-        try:
-            registry.update_job(job_id, "running", 0.1, "Preparing dataset")
+    parquet_path = processed_record["path"]
+    if not Path(parquet_path).is_absolute():
+        parquet_path = str(request.app.state.config.root / parquet_path)
 
-            def progress(epoch, total, metrics):
-                pct = 0.1 + 0.85 * (epoch / total)
-                registry.update_job(
-                    job_id,
-                    "running",
-                    pct,
-                    f"Epoch {epoch}/{total} — "
-                    f"val_acc={metrics['val_accuracy']:.3f}",
-                )
+    db_path = str(request.app.state.registry.path)
 
-            result = run_experiment(
-                frame,
-                symbol,
-                timeframe,
-                exp_dir,
-                window_size=max(16, min(window_size, 256)),
-                atr_multiplier=max(0.5, min(atr_multiplier, 20.0)),
-                epochs=max(1, min(epochs, 200)),
-                d_model=max(16, min(d_model, 512)),
-                n_layers=max(1, min(n_layers, 12)),
-                lr=max(1e-5, min(lr, 0.1)),
-            )
-            registry.update_job(
-                job_id,
-                "completed",
-                1.0,
-                f"Test accuracy: {result.test_accuracy:.1%}",
-            )
-        except Exception as exc:
-            registry.update_job(job_id, "failed", 1.0, str(exc))
+    cmd = [
+        sys.executable, "-m", "trade_exp_12.model.run_training",
+        "--parquet", parquet_path,
+        "--symbol", symbol,
+        "--timeframe", timeframe,
+        "--output-root", str(exp_dir),
+        "--db", db_path,
+        "--job-id", str(job_id),
+        "--window-size", str(max(16, min(window_size, 256))),
+        "--atr-multiplier", str(max(0.5, min(atr_multiplier, 20.0))),
+        "--epochs", str(max(1, min(epochs, 200))),
+        "--d-model", str(max(16, min(d_model, 512))),
+        "--n-layers", str(max(1, min(n_layers, 12))),
+        "--lr", str(max(1e-5, min(lr, 0.1))),
+    ]
 
-    asyncio.create_task(_run())
+    env = {**__import__("os").environ, "SMC_CREDIT": "0"}
+    subprocess.Popen(cmd, env=env, cwd=str(request.app.state.config.root))
+    logger.info("Spawned training subprocess for %s %sm (job %d)", symbol, timeframe, job_id)
     return RedirectResponse(f"/jobs/{job_id}", status_code=303)
 
 
