@@ -168,7 +168,7 @@ def main() -> None:
     from sklearn.manifold import TSNE
     log.info("Running t-SNE on %d points...", len(embeddings))
     tsne = TSNE(n_components=2, perplexity=min(30, len(embeddings) - 1),
-                random_state=42, n_iter=1000)
+                random_state=42, max_iter=1000)
     coords_2d = tsne.fit_transform(embeddings)
     log.info("t-SNE done")
 
