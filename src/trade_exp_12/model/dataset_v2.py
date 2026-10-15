@@ -48,9 +48,12 @@ class PretrainInfo:
 def _load_pair_windows(
     parquet_path: str | Path,
     window_size: int,
-) -> np.ndarray:
+) -> np.ndarray | None:
     """Load a parquet, extract feature windows (no labels)."""
-    frame = pd.read_parquet(parquet_path)
+    p = Path(parquet_path)
+    if not p.exists():
+        return None
+    frame = pd.read_parquet(p)
     # Add reversal labels to get feature_ready column
     # (ATR computation populates feature_ready)
     labeled = add_reversal_labels(frame, atr_multiplier=3.0)
@@ -81,8 +84,10 @@ def prepare_pretrain_dataset(
         p = Path(path)
         # Extract pair name from path: .../BRETTUSDT/15/xxx.parquet
         pair_name = f"{p.parent.parent.name}/{p.parent.name}"
-        pair_names.append(pair_name)
         windows = _load_pair_windows(p, window_size)
+        if windows is None:
+            continue
+        pair_names.append(pair_name)
         all_windows.append(windows)
 
     combined = np.concatenate(all_windows, axis=0)
