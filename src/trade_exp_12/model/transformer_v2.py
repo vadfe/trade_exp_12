@@ -71,11 +71,15 @@ class MarketMAE(nn.Module):
         max_len: int = 512,
         mask_ratio: float = 0.4,
         num_classes: int = 3,
+        mask_mode: str = "random",
+        forecast_bars: int = 8,
     ) -> None:
         super().__init__()
         self.n_features = n_features
         self.d_model = d_model
         self.mask_ratio = mask_ratio
+        self.mask_mode = mask_mode
+        self.forecast_bars = forecast_bars
 
         # Encoder
         self.patch_embed = PatchEmbedding(n_features, d_model)
@@ -111,12 +115,19 @@ class MarketMAE(nn.Module):
             nn.Linear(d_model, num_classes),
         )
 
-    def _random_mask(self, batch_size: int, seq_len: int, device: torch.device):
-        """Generate random mask: True = masked (to reconstruct)."""
+    def _generate_mask(self, batch_size: int, seq_len: int, device: torch.device):
+        """Generate mask: True = masked (to reconstruct)."""
+        mask = torch.zeros(batch_size, seq_len, dtype=torch.bool, device=device)
+        if self.mask_mode == "tail":
+            # Mask the last forecast_bars timesteps — the encoder must predict future
+            n_mask = min(self.forecast_bars, seq_len - 1)
+            if n_mask > 0:
+                mask[:, -n_mask:] = True
+            return mask
+        # Default: random masking
         n_mask = max(1, int(seq_len * self.mask_ratio))
         noise = torch.rand(batch_size, seq_len, device=device)
         ids_shuffle = torch.argsort(noise, dim=1)
-        mask = torch.zeros(batch_size, seq_len, dtype=torch.bool, device=device)
         mask_indices = ids_shuffle[:, :n_mask]
         mask.scatter_(1, mask_indices, True)
         return mask
@@ -153,7 +164,7 @@ class MarketMAE(nn.Module):
         B, W, F = x.shape
         device = x.device
 
-        mask = self._random_mask(B, W, device)  # [B, W]
+        mask = self._generate_mask(B, W, device)  # [B, W]
 
         # Embed all positions
         h = self.patch_embed(x)  # [B, W, D]

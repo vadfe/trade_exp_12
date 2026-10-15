@@ -12,11 +12,18 @@
 <!-- PRETRAIN SECTION -->
 <section class="panel">
   <h2>1. Pretrain encoder (MAE)</h2>
-  <p>Trains on ALL processed pairs. Masks random timesteps, reconstructs features. No labels needed.</p>
+  <p>Trains on ALL processed pairs. No labels needed.</p>
   <form method="post" action="/v2/pretrain/run" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
     <label>Window <input type="number" name="window_size" value="64" min="16" max="256" style="width:70px"></label>
     <label>Epochs <input type="number" name="epochs" value="50" min="1" max="500" style="width:70px"></label>
-    <label>Mask ratio <input type="number" name="mask_ratio" value="0.4" step="0.05" min="0.1" max="0.8" style="width:70px"></label>
+    <label>Mask mode
+      <select name="mask_mode" style="width:110px">
+        <option value="random">random</option>
+        <option value="tail" selected>tail</option>
+      </select>
+    </label>
+    <label>Forecast bars <input type="number" name="forecast_bars" value="8" min="1" max="32" style="width:70px" title="For tail mode: how many last bars to predict"></label>
+    <label>Mask ratio <input type="number" name="mask_ratio" value="0.4" step="0.05" min="0.1" max="0.8" style="width:70px" title="For random mode only"></label>
     <label>d_model <input type="number" name="d_model" value="64" min="16" max="512" style="width:70px"></label>
     <label>Enc layers <input type="number" name="n_encoder_layers" value="4" min="1" max="12" style="width:70px"></label>
     <label>Dec layers <input type="number" name="n_decoder_layers" value="2" min="1" max="6" style="width:70px"></label>
@@ -31,7 +38,7 @@
 <section class="panel">
   <h2>Pretrained encoders</h2>
   <table>
-    <thead><tr><th>Run ID</th><th>Pairs</th><th>Windows</th><th>Best Val Loss</th><th>Epochs</th><th>d_model</th><th>Mask</th><th></th></tr></thead>
+    <thead><tr><th>Run ID</th><th>Pairs</th><th>Windows</th><th>Best Val Loss</th><th>Epochs</th><th>d_model</th><th>Mask mode</th><th>Forecast</th><th></th></tr></thead>
     <tbody>
     {% for run in pretrain_runs %}
     <tr>
@@ -41,7 +48,8 @@
       <td><b>{{ "%.5f"|format(run.best_val_loss) }}</b></td>
       <td>{{ run.hyperparameters.get('epochs', '?') }}</td>
       <td>{{ run.hyperparameters.get('d_model', '?') }}</td>
-      <td>{{ run.hyperparameters.get('mask_ratio', '?') }}</td>
+      <td>{{ run.hyperparameters.get('mask_mode', '?') }}</td>
+      <td>{{ run.hyperparameters.get('forecast_bars', '') }}</td>
       <td>
         <a class="button" href="/v2/pretrain/{{ run.run_id }}">Details</a>
         <a class="button" href="/v2/embeddings/{{ run.run_id }}">Embeddings</a>

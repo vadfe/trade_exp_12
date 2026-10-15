@@ -57,6 +57,8 @@ def main() -> None:
     parser.add_argument("--d-ff", type=int, default=256)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument("--mask-mode", type=str, default="random")
+    parser.add_argument("--forecast-bars", type=int, default=8)
     args = parser.parse_args()
 
     from pathlib import Path
@@ -91,6 +93,8 @@ def main() -> None:
             d_ff=args.d_ff,
             dropout=0.1,
             mask_ratio=args.mask_ratio,
+            mask_mode=args.mask_mode,
+            forecast_bars=args.forecast_bars,
             progress_callback=progress,
         )
         _update_job(

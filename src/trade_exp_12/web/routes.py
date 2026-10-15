@@ -669,6 +669,8 @@ async def start_pretrain(
     window_size: int = Form(64),
     epochs: int = Form(50),
     mask_ratio: float = Form(0.4),
+    mask_mode: str = Form("random"),
+    forecast_bars: int = Form(8),
     d_model: int = Form(64),
     n_encoder_layers: int = Form(4),
     n_decoder_layers: int = Form(2),
@@ -717,6 +719,8 @@ async def start_pretrain(
         "--d-ff", str(max(64, min(d_ff, 2048))),
         "--lr", str(max(1e-5, min(lr, 0.1))),
         "--batch-size", str(max(32, min(batch_size, 2048))),
+        "--mask-mode", mask_mode if mask_mode in ("random", "tail") else "random",
+        "--forecast-bars", str(max(1, min(forecast_bars, window_size // 2))),
     ]
 
     env = {**__import__("os").environ, "SMC_CREDIT": "0"}
