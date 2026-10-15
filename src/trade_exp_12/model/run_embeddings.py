@@ -106,7 +106,11 @@ def main() -> None:
     pair_names = []
 
     for pq_path in args.parquets:
-        frame = pd.read_parquet(pq_path)
+        pq = Path(pq_path)
+        if not pq.exists():
+            log.warning("Skipping missing parquet: %s", pq_path)
+            continue
+        frame = pd.read_parquet(pq)
         # Extract pair name from path
         parts = Path(pq_path).parts
         pair_name = "unknown"
