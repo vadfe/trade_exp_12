@@ -54,9 +54,11 @@ def pretrain(
     d_ff: int = 256,
     dropout: float = 0.1,
     mask_ratio: float = 0.4,
+    mask_mode: str = "random",
+    forecast_bars: int = 8,
     progress_callback=None,
 ) -> PretrainResult:
-    """MAE pretraining: mask random timesteps, reconstruct features."""
+    """MAE pretraining: mask timesteps and reconstruct features."""
     output_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -79,6 +81,8 @@ def pretrain(
         dropout=dropout,
         max_len=info.window_size,
         mask_ratio=mask_ratio,
+        mask_mode=mask_mode,
+        forecast_bars=forecast_bars,
     ).to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
@@ -158,6 +162,7 @@ def pretrain(
             "d_ff": d_ff, "dropout": dropout,
             "lr": lr, "batch_size": batch_size,
             "epochs": epochs, "mask_ratio": mask_ratio,
+            "mask_mode": mask_mode, "forecast_bars": forecast_bars,
             "window_size": info.window_size,
         },
     }
