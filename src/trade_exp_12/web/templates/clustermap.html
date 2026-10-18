@@ -4,11 +4,11 @@
 <section class="panel">
   <h2>Cluster map: {{ symbol }} {{ timeframe }}m</h2>
   <p class="muted">
-    Every bar is colored by the embedding cluster of the window that ends on it.
-    Persistent color blocks = the encoder sees a stable market state.
-    Flickering colors = noise, not state.
+    Candlesticks on top, colored state ribbon below — one color per cluster.
+    Long single-color segments = the encoder sees a stable market state.
+    Rapid flicker = noise.
   </p>
-  <div id="chart" style="height:70vh"></div>
+  <div id="chart" style="height:80vh"></div>
 </section>
 
 <section class="panel">
@@ -40,45 +40,66 @@
   var nClusters = {{ n_clusters }};
 
   var time = bars.map(function(b){return b.open_time});
-  var open = bars.map(function(b){return b.open});
-  var high = bars.map(function(b){return b.high});
-  var low = bars.map(function(b){return b.low});
-  var close = bars.map(function(b){return b.close});
-  var clus = bars.map(function(b){return b.cluster});
 
-  /* Base candlestick (faint) */
+  /* --- Row 1: candlesticks --- */
   var traces = [{
-    x: time, open: open, high: high, low: low, close: close,
+    x: time,
+    open: bars.map(function(b){return b.open}),
+    high: bars.map(function(b){return b.high}),
+    low: bars.map(function(b){return b.low}),
+    close: bars.map(function(b){return b.close}),
     type: 'candlestick', name: 'OHLC',
-    increasing: {line: {color: 'rgba(38,166,154,0.35)'}},
-    decreasing: {line: {color: 'rgba(239,83,80,0.35)'}},
+    increasing: {line: {color: '#26a69a'}},
+    decreasing: {line: {color: '#ef5350'}},
+    xaxis: 'x', yaxis: 'y',
   }];
 
-  /* One marker trace per cluster, drawn at bar low so colors show under price */
+  /* --- Row 2: cluster state ribbon (discrete colorscale heatmap) --- */
+  var colorscale = [];
+  for (var c = 0; c < nClusters; c++) {
+    var lo = c / nClusters, hi = (c + 1) / nClusters;
+    colorscale.push([lo, colors[c]]);
+    colorscale.push([hi, colors[c]]);
+  }
+  traces.push({
+    x: time,
+    z: [bars.map(function(b){return b.cluster})],
+    type: 'heatmap',
+    colorscale: colorscale,
+    showscale: false,
+    xaxis: 'x2', yaxis: 'y2',
+    hovertemplate: 'time=%{x}<br>cluster=%{z}<extra></extra>',
+  });
+
+  /* --- Row 3: volume colored by cluster --- */
   for (var c = 0; c < nClusters; c++) {
     var xs = [], ys = [];
     for (var i = 0; i < bars.length; i++) {
-      if (clus[i] === c) {
-        xs.push(time[i]);
-        ys.push(low[i] * 0.997);
-      }
+      if (bars[i].cluster === c) { xs.push(time[i]); ys.push(bars[i].volume); }
+      else { xs.push(time[i]); ys.push(null); }
     }
-    if (xs.length === 0) continue;
     traces.push({
-      x: xs, y: ys, mode: 'markers', type: 'scatter',
-      name: 'Cluster ' + c,
-      marker: {color: colors[c], size: 5, symbol: 'square'},
+      x: xs, y: ys, type: 'bar', name: 'Cl ' + c,
+      marker: {color: colors[c]},
+      xaxis: 'x3', yaxis: 'y3',
     });
   }
 
-  Plotly.newPlot('chart', traces, {
+  var layout = {
     paper_bgcolor: '#0f1117', plot_bgcolor: '#0f1117',
     font: {color: '#c7cbd1'},
-    xaxis: {rangeslider: {visible: false}},
     margin: {t: 30, b: 40, l: 60, r: 20},
-    showlegend: true,
-    legend: {orientation: 'h', y: 1.06},
-  }, {responsive: true});
+    xaxis: {rangeslider: {visible: false}},
+    xaxis2: {matches: 'x'},
+    xaxis3: {matches: 'x'},
+    yaxis: {domain: [0.40, 1]},
+    yaxis2: {domain: [0.30, 0.40], showticklabels: false, title: 'state'},
+    yaxis3: {domain: [0, 0.28], title: 'vol'},
+    showlegend: false,
+    barmode: 'stack',
+  };
+
+  Plotly.newPlot('chart', traces, layout, {responsive: true});
 })();
 </script>
 {% endblock %}
