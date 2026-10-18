@@ -904,3 +904,99 @@ def embeddings_page(request: Request, run_id: str):
         "embeddings.html",
         context(request, data=data, run_id=run_id),
     )
+
+
+_CLUSTER_COLORS = [
+    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+    "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+]
+
+
+@router.post("/v2/clustermap/run")
+async def start_clustermap(
+    request: Request,
+    pretrain_run_id: str = Form(...),
+    symbol: str = Form(...),
+    timeframe: str = Form(...),
+    n_clusters: int = Form(8),
+    fit_windows: int = Form(20000),
+    atr_multiplier: float = Form(3.0),
+):
+    """Build a per-bar cluster map for one pair/timeframe."""
+    pretrain_root = _pretrain_dir(request) / pretrain_run_id
+    encoder_path = pretrain_root / "encoder.pt"
+    report_path = pretrain_root / "report.json"
+    if not encoder_path.exists() or not report_path.exists():
+        raise HTTPException(status_code=404, detail="Pretrained encoder not found")
+
+    registry = request.app.state.registry
+    settings = request.app.state.config.settings
+
+    parquet_paths = []
+    for sym in settings.universe.symbols:
+        for tf in settings.universe.timeframes:
+            rec = registry.latest_processed(sym, tf)
+            if rec is not None:
+                p = rec["path"]
+                if not Path(p).is_absolute():
+                    p = str(request.app.state.config.root / p)
+                parquet_paths.append(p)
+
+    target_rec = registry.latest_processed(symbol, timeframe)
+    if target_rec is None:
+        raise HTTPException(status_code=404, detail=f"No processed data for {symbol} {timeframe}m")
+    target_path = target_rec["path"]
+    if not Path(target_path).is_absolute():
+        target_path = str(request.app.state.config.root / target_path)
+
+    output_path = pretrain_root / f"clustermap_{symbol}_{timeframe}.json"
+    job_id = registry.create_job("clustermap_v2", symbol, timeframe)
+    db_path = str(registry.path)
+
+    with open(report_path) as f:
+        pt_report = json.load(f)
+    window_size = pt_report["hyperparameters"]["window_size"]
+
+    cmd = [
+        sys.executable, "-m", "trade_exp_12.model.run_cluster_map",
+        "--encoder-path", str(encoder_path),
+        "--pretrain-report", str(report_path),
+        "--parquets", *parquet_paths,
+        "--target-parquet", target_path,
+        "--output", str(output_path),
+        "--window-size", str(window_size),
+        "--atr-multiplier", str(atr_multiplier),
+        "--n-clusters", str(max(2, min(n_clusters, 20))),
+        "--fit-windows", str(max(1000, min(fit_windows, 100000))),
+        "--db", db_path,
+        "--job-id", str(job_id),
+    ]
+
+    env = {**__import__("os").environ, "SMC_CREDIT": "0"}
+    subprocess.Popen(cmd, env=env, cwd=str(request.app.state.config.root))
+    logger.info("Spawned cluster map (job %d) %s %s", job_id, symbol, timeframe)
+    return RedirectResponse(f"/jobs/{job_id}", status_code=303)
+
+
+@router.get("/v2/clustermap/{run_id}/{symbol}/{timeframe}")
+def clustermap_page(request: Request, run_id: str, symbol: str, timeframe: str):
+    """Per-bar cluster map on the price chart."""
+    cm_path = _pretrain_dir(request) / run_id / f"clustermap_{symbol}_{timeframe}.json"
+    if not cm_path.exists():
+        raise HTTPException(status_code=404, detail="Cluster map not found. Run it first.")
+    with open(cm_path) as f:
+        data = json.load(f)
+    colors = {i: _CLUSTER_COLORS[i % len(_CLUSTER_COLORS)] for i in range(data["n_clusters"])}
+    return templates.TemplateResponse(
+        request,
+        "clustermap.html",
+        context(
+            request,
+            run_id=run_id, symbol=symbol, timeframe=timeframe,
+            n_clusters=data["n_clusters"],
+            stats=data["cluster_stats"],
+            colors=colors,
+            bars_json=json.dumps(data["bars"]),
+            colors_json=json.dumps(colors),
+        ),
+    )

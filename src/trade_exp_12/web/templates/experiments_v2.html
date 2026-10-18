@@ -74,6 +74,36 @@
     <button type="submit">Analyze</button>
   </form>
 </section>
+
+<!-- CLUSTER MAP SECTION -->
+<section class="panel">
+  <h2>1c. Cluster map on price chart</h2>
+  <p>Color every bar of one pair by its embedding cluster. Blocks of color = stable market states.</p>
+  <form method="post" action="/v2/clustermap/run" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+    <label>Encoder <select name="pretrain_run_id">
+      {% for run in pretrain_runs %}<option value="{{ run.run_id }}">{{ run.run_id }} (loss={{ "%.5f"|format(run.best_val_loss) }})</option>{% endfor %}
+    </select></label>
+    <label>Pair <select name="symbol">
+      {% for s in config.universe.symbols %}<option>{{ s }}</option>{% endfor %}
+    </select></label>
+    <label>TF <select name="timeframe">
+      {% for t in config.universe.timeframes %}<option>{{ t }}</option>{% endfor %}
+    </select></label>
+    <label>Clusters <input type="number" name="n_clusters" value="8" min="2" max="20" style="width:70px"></label>
+    <label>Fit windows <input type="number" name="fit_windows" value="20000" min="1000" max="100000" style="width:90px"></label>
+    <label>ATR mult <input type="number" name="atr_multiplier" value="3.0" step="0.5" min="0.5" max="20" style="width:70px"></label>
+    <button type="submit">Build map</button>
+  </form>
+  {% for run in pretrain_runs %}
+  <p><small>{{ run.run_id }}:
+    {% for s in config.universe.symbols %}
+      {% for t in config.universe.timeframes %}
+        <a href="/v2/clustermap/{{ run.run_id }}/{{ s }}/{{ t }}">{{ s }} {{ t }}m</a>
+      {% endfor %}
+    {% endfor %}
+  </small></p>
+  {% endfor %}
+</section>
 {% endif %}
 
 <!-- FINETUNE SECTION -->

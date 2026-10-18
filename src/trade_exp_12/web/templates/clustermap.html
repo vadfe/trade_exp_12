@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Cluster Map — {{ run_id }} / {{ symbol }} {{ timeframe }}m{% endblock %}
+{% block content %}
+<section class="panel">
+  <h2>Cluster map: {{ symbol }} {{ timeframe }}m</h2>
+  <p class="muted">
+    Every bar is colored by the embedding cluster of the window that ends on it.
+    Persistent color blocks = the encoder sees a stable market state.
+    Flickering colors = noise, not state.
+  </p>
+  <div id="chart" style="height:70vh"></div>
+</section>
+
+<section class="panel">
+  <h2>Cluster composition</h2>
+  <table>
+    <thead><tr><th>Cluster</th><th>Color</th><th>Bars</th><th>%</th><th>RevUp</th><th>RevDown</th></tr></thead>
+    <tbody>
+    {% for s in stats %}
+    <tr>
+      <td>{{ s.cluster }}</td>
+      <td><span style="display:inline-block;width:14px;height:14px;background:{{ colors[s.cluster] }};border-radius:2px"></span></td>
+      <td>{{ s.total }}</td>
+      <td>{{ "%.1f"|format(s.pct) }}%</td>
+      <td>{{ s.reversal_up }}</td>
+      <td>{{ s.reversal_down }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.plot.ly/plotly-3.0.1.min.js"></script>
+<script>
+(function() {
+  var bars = {{ bars_json | safe }};
+  var colors = {{ colors_json | safe }};
+  var nClusters = {{ n_clusters }};
+
+  var time = bars.map(function(b){return b.open_time});
+  var open = bars.map(function(b){return b.open});
+  var high = bars.map(function(b){return b.high});
+  var low = bars.map(function(b){return b.low});
+  var close = bars.map(function(b){return b.close});
+  var clus = bars.map(function(b){return b.cluster});
+
+  /* Base candlestick (faint) */
+  var traces = [{
+    x: time, open: open, high: high, low: low, close: close,
+    type: 'candlestick', name: 'OHLC',
+    increasing: {line: {color: 'rgba(38,166,154,0.35)'}},
+    decreasing: {line: {color: 'rgba(239,83,80,0.35)'}},
+  }];
+
+  /* One marker trace per cluster, drawn at bar low so colors show under price */
+  for (var c = 0; c < nClusters; c++) {
+    var xs = [], ys = [];
+    for (var i = 0; i < bars.length; i++) {
+      if (clus[i] === c) {
+        xs.push(time[i]);
+        ys.push(low[i] * 0.997);
+      }
+    }
+    if (xs.length === 0) continue;
+    traces.push({
+      x: xs, y: ys, mode: 'markers', type: 'scatter',
+      name: 'Cluster ' + c,
+      marker: {color: colors[c], size: 5, symbol: 'square'},
+    });
+  }
+
+  Plotly.newPlot('chart', traces, {
+    paper_bgcolor: '#0f1117', plot_bgcolor: '#0f1117',
+    font: {color: '#c7cbd1'},
+    xaxis: {rangeslider: {visible: false}},
+    margin: {t: 30, b: 40, l: 60, r: 20},
+    showlegend: true,
+    legend: {orientation: 'h', y: 1.06},
+  }, {responsive: true});
+})();
+</script>
+{% endblock %}
