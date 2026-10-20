@@ -28,6 +28,17 @@ class BybitConfig(BaseModel):
         return value
 
 
+class MoexConfig(BaseModel):
+    base_url: str = "https://iss.moex.com/iss"
+    timeout_seconds: float = Field(default=30, gt=0)
+    request_delay_seconds: float = Field(default=0.5, ge=0)
+    max_retries: int = Field(default=5, ge=0)
+    page_limit: int = Field(default=500, ge=1, le=500)
+    symbols: list[str] = Field(default_factory=lambda: ["SBER", "GAZP", "LKOH"])
+    timeframes: list[str] = Field(default_factory=lambda: ["60"])
+    history_years: int = Field(default=8, ge=1)
+
+
 class UniverseConfig(BaseModel):
     symbols: list[str]
     timeframes: list[str]
@@ -59,6 +70,7 @@ class StorageConfig(BaseModel):
 class ProjectConfig(BaseModel):
     app: AppConfig = AppConfig()
     bybit: BybitConfig = BybitConfig()
+    moex: MoexConfig = MoexConfig()
     universe: UniverseConfig
     storage: StorageConfig = StorageConfig()
 

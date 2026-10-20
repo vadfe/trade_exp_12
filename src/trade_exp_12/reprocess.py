@@ -28,8 +28,13 @@ async def main() -> None:
     )
     ds = DataService(config, registry, raw_storage, proc_storage)
 
-    for sym in config.settings.universe.symbols:
-        for tf in config.settings.universe.timeframes:
+    combos = [(s, tf) for s in config.settings.universe.symbols
+              for tf in config.settings.universe.timeframes]
+    moex = getattr(config.settings, "moex", None)
+    if moex is not None:
+        combos += [(s, tf) for s in moex.symbols for tf in moex.timeframes]
+
+    for sym, tf in combos:
             rec = registry.latest_dataset(sym, tf)
             if rec is None:
                 continue

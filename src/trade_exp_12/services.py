@@ -7,6 +7,7 @@ import pandas as pd
 
 from trade_exp_12.config import LoadedConfig
 from trade_exp_12.data.bybit import BybitClient, interval_milliseconds
+from trade_exp_12.data.moex import MoexClient
 from trade_exp_12.data.quality import inspect_candles
 from trade_exp_12.data.storage import ParquetStorage
 from trade_exp_12.features.relative import add_relative_features
@@ -83,6 +84,58 @@ class DataService:
         except Exception as exc:
             self.registry.update_job(job_id, "failed", 1, str(exc))
 
+    def _category(self, symbol: str) -> str:
+        moex = getattr(self.config.settings, "moex", None)
+        if moex is not None and symbol in moex.symbols:
+            return "shares"
+        return self.config.settings.bybit.category
+
+    async def download_moex(self, job_id: int, symbol: str, timeframe: str) -> None:
+        try:
+            self.registry.update_job(job_id, "running", 0, "Connecting to MOEX ISS")
+            latest = self.registry.latest_dataset(symbol, timeframe)
+            existing = self._read_path(latest["path"]) if latest else None
+            if existing is not None and not existing.empty:
+                next_open = existing.iloc[-1]["open_time"] + pd.Timedelta(
+                    milliseconds=interval_milliseconds(timeframe)
+                )
+                start_ms = int(next_open.timestamp() * 1000)
+            else:
+                start = datetime.now(UTC) - timedelta(
+                    days=365 * self.config.settings.moex.history_years
+                )
+                start_ms = int(start.timestamp() * 1000)
+
+            def progress(rows: int, earliest_ms: int) -> None:
+                earliest = datetime.fromtimestamp(earliest_ms / 1000, UTC).date()
+                self.registry.update_job(
+                    job_id, "running", 0.5, f"Received {rows:,} candles; earliest {earliest}"
+                )
+
+            client = MoexClient(self.config.settings.moex)
+            fresh = await client.download(symbol, timeframe, start_ms, progress=progress)
+            if existing is not None:
+                frame = pd.concat([existing, fresh], ignore_index=True)
+                frame = frame.sort_values("open_time").drop_duplicates("open_time")
+            else:
+                frame = fresh
+            if frame.empty:
+                raise ValueError("MOEX returned no candles")
+            report = inspect_candles(frame, timeframe)
+            if not report.valid:
+                raise ValueError(f"Dataset quality check failed: {report}")
+            record = self.storage.save(frame, "shares", symbol, timeframe, report)
+            self.registry.add_dataset(record)
+            self._frame_cache[record.path] = frame
+            self.registry.update_job(
+                job_id,
+                "completed",
+                1,
+                f"Stored {record.row_count:,} candles, {record.gap_count} gaps",
+            )
+        except Exception as exc:
+            self.registry.update_job(job_id, "failed", 1, str(exc))
+
     async def process(self, job_id: int, symbol: str, timeframe: str) -> None:
         try:
             self.registry.update_job(job_id, "running", 0.1, "Reading raw dataset")
@@ -97,7 +150,7 @@ class DataService:
             report = inspect_candles(frame, timeframe)
             record = self.processed_storage.save(
                 processed,
-                self.config.settings.bybit.category,
+                self._category(symbol),
                 symbol,
                 timeframe,
                 report,

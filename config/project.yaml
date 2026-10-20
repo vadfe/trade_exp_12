@@ -10,6 +10,19 @@ bybit:
   timeout_seconds: 20
   max_retries: 5
 
+moex:
+  base_url: https://iss.moex.com/iss
+  request_delay_seconds: 0.5
+  timeout_seconds: 30
+  max_retries: 5
+  symbols:
+    - SBER
+    - GAZP
+    - LKOH
+  timeframes:
+    - "60"
+  history_years: 8
+
 universe:
   symbols:
     - BRETTUSDT

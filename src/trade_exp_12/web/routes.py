@@ -83,12 +83,29 @@ async def start_download(
     return RedirectResponse(f"/jobs/{job_id}", status_code=303)
 
 
+@router.post("/moex/download")
+async def start_moex_download(
+    request: Request, symbol: str = Form(...), timeframe: str = Form(...)
+):
+    settings = request.app.state.config.settings
+    if symbol not in settings.moex.symbols or timeframe not in settings.moex.timeframes:
+        raise HTTPException(status_code=400, detail="Symbol or timeframe is not configured")
+    registry = request.app.state.registry
+    job_id = registry.create_job("download_moex", symbol, timeframe)
+    asyncio.create_task(request.app.state.data_service.download_moex(job_id, symbol, timeframe))
+    return RedirectResponse(f"/jobs/{job_id}", status_code=303)
+
+
 @router.post("/data/process")
 async def start_processing(
     request: Request, symbol: str = Form(...), timeframe: str = Form(...)
 ):
     settings = request.app.state.config.settings
-    if symbol not in settings.universe.symbols or timeframe not in settings.universe.timeframes:
+    bybit_ok = (symbol in settings.universe.symbols
+                and timeframe in settings.universe.timeframes)
+    moex_ok = (symbol in settings.moex.symbols
+               and timeframe in settings.moex.timeframes)
+    if not (bybit_ok or moex_ok):
         raise HTTPException(status_code=400, detail="Symbol or timeframe is not configured")
     registry = request.app.state.registry
     job_id = registry.create_job("process", symbol, timeframe)
@@ -604,6 +621,36 @@ def _pretrain_dir(request: Request) -> Path:
     return request.app.state.config.root / "data" / "pretrain"
 
 
+def _all_parquet_paths(request: Request) -> list[str]:
+    """Absolute paths of the latest processed parquet for every configured
+    instrument — Bybit universe plus MOEX shares."""
+    settings = request.app.state.config.settings
+    registry = request.app.state.registry
+    combos = [(s, tf) for s in settings.universe.symbols
+              for tf in settings.universe.timeframes]
+    combos += [(s, tf) for s in settings.moex.symbols
+               for tf in settings.moex.timeframes]
+    paths = []
+    for symbol, timeframe in combos:
+        rec = registry.latest_processed(symbol, timeframe)
+        if rec is not None:
+            p = rec["path"]
+            if not Path(p).is_absolute():
+                p = str(request.app.state.config.root / p)
+            paths.append(p)
+    return paths
+
+
+def _all_symbols(request: Request) -> tuple[list[str], list[str]]:
+    """(symbols, timeframes) across Bybit universe + MOEX shares."""
+    settings = request.app.state.config.settings
+    symbols = list(settings.universe.symbols) + [
+        s for s in settings.moex.symbols if s not in settings.universe.symbols]
+    timeframes = list(settings.universe.timeframes) + [
+        tf for tf in settings.moex.timeframes if tf not in settings.universe.timeframes]
+    return symbols, timeframes
+
+
 def _experiments_v2_dir(request: Request) -> Path:
     return request.app.state.config.root / "data" / "experiments_v2"
 
@@ -659,6 +706,8 @@ def experiments_v2_page(request: Request):
             request,
             pretrain_runs=pretrain_runs,
             finetune_runs=finetune_runs,
+            all_symbols=_all_symbols(request)[0],
+            all_timeframes=_all_symbols(request)[1],
         ),
     )
 
@@ -680,18 +729,9 @@ async def start_pretrain(
 ):
     """Launch MAE pretraining on all available processed pairs."""
     registry = request.app.state.registry
-    settings = request.app.state.config.settings
 
     # Collect all processed parquets
-    parquet_paths = []
-    for symbol in settings.universe.symbols:
-        for timeframe in settings.universe.timeframes:
-            rec = registry.latest_processed(symbol, timeframe)
-            if rec is not None:
-                p = rec["path"]
-                if not Path(p).is_absolute():
-                    p = str(request.app.state.config.root / p)
-                parquet_paths.append(p)
+    parquet_paths = _all_parquet_paths(request)
 
     if not parquet_paths:
         raise HTTPException(status_code=404, detail="No processed datasets found")
@@ -847,18 +887,9 @@ async def start_embeddings(
         raise HTTPException(status_code=404, detail="Pretrained encoder not found")
 
     registry = request.app.state.registry
-    settings = request.app.state.config.settings
 
     # Collect all processed parquets
-    parquet_paths = []
-    for symbol in settings.universe.symbols:
-        for timeframe in settings.universe.timeframes:
-            rec = registry.latest_processed(symbol, timeframe)
-            if rec is not None:
-                p = rec["path"]
-                if not Path(p).is_absolute():
-                    p = str(request.app.state.config.root / p)
-                parquet_paths.append(p)
+    parquet_paths = _all_parquet_paths(request)
 
     if not parquet_paths:
         raise HTTPException(status_code=404, detail="No processed datasets found")
@@ -930,17 +961,8 @@ async def start_clustermap(
         raise HTTPException(status_code=404, detail="Pretrained encoder not found")
 
     registry = request.app.state.registry
-    settings = request.app.state.config.settings
 
-    parquet_paths = []
-    for sym in settings.universe.symbols:
-        for tf in settings.universe.timeframes:
-            rec = registry.latest_processed(sym, tf)
-            if rec is not None:
-                p = rec["path"]
-                if not Path(p).is_absolute():
-                    p = str(request.app.state.config.root / p)
-                parquet_paths.append(p)
+    parquet_paths = _all_parquet_paths(request)
 
     target_rec = registry.latest_processed(symbol, timeframe)
     if target_rec is None:
