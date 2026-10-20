@@ -79,7 +79,7 @@
   <p>Extract embeddings from encoder, visualize t-SNE, find clusters.</p>
   <form method="post" action="/v2/embeddings/run" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
     <label>Encoder <select name="pretrain_run_id">
-      {% for run in pretrain_runs %}<option value="{{ run.run_id }}">{{ run.run_id }} (loss={{ "%.5f"|format(run.best_val_loss) }})</option>{% endfor %}
+      {% for run in pretrain_runs %}<option value="{{ run.run_id }}">{{ run.run_id }} [{{ run.pairs_label }}]</option>{% endfor %}
     </select></label>
     <label>Clusters <input type="number" name="n_clusters" value="8" min="2" max="50" style="width:70px"></label>
     <label>Max windows <input type="number" name="max_windows" value="20000" min="1000" max="100000" style="width:90px"></label>
@@ -93,11 +93,13 @@
   <h2>1c. Cluster state analysis (numeric)</h2>
   <p>Assigns every bar of one pair to an embedding cluster, then reports per-cluster
      volatility, volume, trend, persistence, transitions and pair concentration — tables only.</p>
+  <p class="muted"><b>Encoder</b> = which pretrain run's model to use (trained-on pairs shown in brackets).
+  <b>Instrument</b> = which pair's bars to analyze. Usually: SBER-encoder → Instrument SBER.</p>
   <form method="post" action="/v2/clustermap/run" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
     <label>Encoder <select name="pretrain_run_id">
-      {% for run in pretrain_runs %}<option value="{{ run.run_id }}">{{ run.run_id }} (loss={{ "%.5f"|format(run.best_val_loss) }})</option>{% endfor %}
+      {% for run in pretrain_runs %}<option value="{{ run.run_id }}">{{ run.run_id }} [{{ run.pairs_label }}]</option>{% endfor %}
     </select></label>
-    <label>Pair <select name="symbol">
+    <label>Instrument <select name="symbol">
       {% for s in all_symbols %}<option>{{ s }}</option>{% endfor %}
     </select></label>
     <label>TF <select name="timeframe">
@@ -127,7 +129,7 @@
   <p>Freeze pretrained encoder, train classification head (reversal_up / reversal_down / hold).</p>
   <form method="post" action="/v2/finetune/run" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
     <label>Encoder <select name="pretrain_run_id">
-      {% for run in pretrain_runs %}<option value="{{ run.run_id }}">{{ run.run_id }} (loss={{ "%.5f"|format(run.best_val_loss) }})</option>{% endfor %}
+      {% for run in pretrain_runs %}<option value="{{ run.run_id }}">{{ run.run_id }} [{{ run.pairs_label }}]</option>{% endfor %}
     </select></label>
     <label>Pair <select name="symbol">
       {% for s in all_symbols %}<option>{{ s }}</option>{% endfor %}

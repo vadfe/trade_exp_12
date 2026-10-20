@@ -669,9 +669,11 @@ def experiments_v2_page(request: Request):
             if report_path.exists():
                 with open(report_path) as f:
                     report = json.load(f)
+                pairs = report.get("info", {}).get("pairs", [])
                 pretrain_runs.append({
                     "run_id": run_dir.name,
                     "info": report.get("info", {}),
+                    "pairs_label": ", ".join(pairs) if pairs else "?",
                     "best_val_loss": report.get("best_val_loss"),
                     "hyperparameters": report.get("hyperparameters", {}),
                     "path": str(run_dir),
