@@ -14,6 +14,19 @@
   <h2>1. Pretrain encoder (MAE)</h2>
   <p>Trains on ALL processed pairs. No labels needed.</p>
   <form method="post" action="/v2/pretrain/run" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+    <label>Data
+      <select name="source" style="width:90px">
+        <option value="all">all</option>
+        <option value="bybit">bybit</option>
+        <option value="moex" selected>moex</option>
+      </select>
+    </label>
+    <label>Only symbol
+      <select name="only_symbol" style="width:110px">
+        <option value="ALL" selected>ALL (pooled)</option>
+        {% for s in all_symbols %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+      </select>
+    </label>
     <label>Window <input type="number" name="window_size" value="64" min="16" max="256" style="width:70px"></label>
     <label>Epochs <input type="number" name="epochs" value="50" min="1" max="500" style="width:70px"></label>
     <label>Mask mode

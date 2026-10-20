@@ -621,7 +621,7 @@ def _pretrain_dir(request: Request) -> Path:
     return request.app.state.config.root / "data" / "pretrain"
 
 
-def _all_parquet_paths(request: Request) -> list[str]:
+def _all_parquet_paths(request: Request, symbols: list[str] | None = None) -> list[str]:
     """Absolute paths of the latest processed parquet for every configured
     instrument — Bybit universe plus MOEX shares."""
     settings = request.app.state.config.settings
@@ -630,6 +630,9 @@ def _all_parquet_paths(request: Request) -> list[str]:
               for tf in settings.universe.timeframes]
     combos += [(s, tf) for s in settings.moex.symbols
                for tf in settings.moex.timeframes]
+    if symbols is not None:
+        wanted = set(symbols)
+        combos = [(s, tf) for s, tf in combos if s in wanted]
     paths = []
     for symbol, timeframe in combos:
         rec = registry.latest_processed(symbol, timeframe)
@@ -726,12 +729,23 @@ async def start_pretrain(
     d_ff: int = Form(256),
     lr: float = Form(0.001),
     batch_size: int = Form(256),
+    source: str = Form("all"),
+    only_symbol: str = Form("ALL"),
 ):
-    """Launch MAE pretraining on all available processed pairs."""
+    """Launch MAE pretraining; ``source`` picks all/bybit/moex, ``only_symbol``
+    can restrict to a single instrument for per-instrument runs."""
     registry = request.app.state.registry
+    settings = request.app.state.config.settings
 
-    # Collect all processed parquets
-    parquet_paths = _all_parquet_paths(request)
+    # Collect processed parquets, optionally restricted
+    symbols: list[str] | None = None
+    if source == "bybit":
+        symbols = list(settings.universe.symbols)
+    elif source == "moex":
+        symbols = list(settings.moex.symbols)
+    if only_symbol != "ALL":
+        symbols = [only_symbol]
+    parquet_paths = _all_parquet_paths(request, symbols)
 
     if not parquet_paths:
         raise HTTPException(status_code=404, detail="No processed datasets found")
@@ -741,7 +755,7 @@ async def start_pretrain(
     output_dir = _pretrain_dir(request) / stamp
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    job_id = registry.create_job("pretrain_v2", "ALL", "ALL")
+    job_id = registry.create_job("pretrain_v2", only_symbol, source)
     db_path = str(registry.path)
 
     cmd = [
