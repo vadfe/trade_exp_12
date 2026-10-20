@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block title %}Cluster Stats — {{ run_id }} / {{ symbol }} {{ timeframe }}m{% endblock %}
+{% block content %}
+<section class="hero">
+  <div>
+    <span class="eyebrow">Numeric state analysis</span>
+    <h1>{{ symbol }} {{ timeframe }}m — cluster states</h1>
+    <p>What each embedding cluster means in market terms. Heuristic labels are derived from measured extrema only.</p>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Run metadata</h2>
+  <table>
+    <tbody>
+      <tr><td>Run</td><td><small>{{ run_id }}</small></td></tr>
+      <tr><td>Bars analyzed</td><td>{{ "{:,}".format(n_bars) }}</td></tr>
+      <tr><td>Clusters</td><td>{{ n_clusters }}</td></tr>
+      <tr><td>Window size</td><td>{{ meta.window_size }}</td></tr>
+      <tr><td>Mask mode / forecast bars</td><td>{{ meta.mask_mode }} / {{ meta.forecast_bars }}</td></tr>
+      <tr><td>Features / d_model</td><td>{{ meta.feature_count }} / {{ meta.d_model }}</td></tr>
+      <tr><td>Best val loss</td><td>{{ "%.5f"|format(meta.best_val_loss or 0) }}</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="panel">
+  <h2>Cluster semantics</h2>
+  <p class="muted">Market profile per cluster: volatility (range in ATR), volume vs 20-bar median,
+    smoothed 10-bar return in basis points, trend slope, position in 20-bar corridor,
+    ATR compression/expansion. Interpretation column is a heuristic from measured extrema.</p>
+  <table>
+    <thead><tr>
+      <th>Cl</th><th>Bars</th><th>%</th><th>Range ATR</th><th>RelVol</th><th>VolSpike</th>
+      <th>Ret10 bp</th><th>|Ret10| bp</th><th>Pos20</th><th>Slope10</th><th>ATR ratio</th>
+      <th>Interpretation (heuristic)</th>
+    </tr></thead>
+    <tbody>
+    {% for s in stats %}
+    <tr>
+      {% if s.total %}
+      <td><b>{{ s.cluster }}</b></td>
+      <td>{{ "{:,}".format(s.total) }}</td>
+      <td>{{ s.pct }}%</td>
+      <td>{{ s.avg_range_atr }}</td>
+      <td>{{ s.avg_rel_volume }}</td>
+      <td>{{ s.avg_vol_spike }}</td>
+      <td>{{ s.avg_ret10_bp }}</td>
+      <td>{{ s.avg_abs_ret10_bp }}</td>
+      <td>{{ s.avg_pos_in_range }}</td>
+      <td>{{ s.avg_trend_slope }}</td>
+      <td>{{ s.avg_atr_ratio }}</td>
+      <td>{{ s.interpretation }}</td>
+      {% else %}
+      <td><b>{{ s.cluster }}</b></td><td colspan="11" class="muted">empty in this pair</td>
+      {% endif %}
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel">
+  <h2>Persistence</h2>
+  <p class="muted">Long mean run = stable regime. Median near 1 = flicker/transition cluster.
+    Overall: {{ boundary.n_segments }} segments, mean run {{ boundary.mean_run_all }} bars,
+    {{ boundary.flicker_pct }}% single-bar flickers.</p>
+  <table>
+    <thead><tr><th>Cl</th><th>Segments</th><th>Mean run</th><th>Median run</th><th>Max run</th></tr></thead>
+    <tbody>
+    {% for s in stats %}
+    {% if s.total %}
+    <tr>
+      <td><b>{{ s.cluster }}</b></td>
+      <td>{{ s.n_segments }}</td>
+      <td>{{ s.run_mean }}</td>
+      <td>{{ s.run_median }}</td>
+      <td>{{ s.run_max }}</td>
+    </tr>
+    {% endif %}
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel">
+  <h2>Top transitions</h2>
+  <p class="muted">Most frequent state switches. Pairs that dominate (e.g. 4→2, 2→4)
+    suggest a transition cluster sitting on the boundary of a larger regime.</p>
+  <table>
+    <thead><tr><th>From</th><th>To</th><th>Count</th></tr></thead>
+    <tbody>
+    {% for t in transitions %}
+    <tr><td>{{ t['from'] }}</td><td>{{ t['to'] }}</td><td>{{ "{:,}".format(t.count) }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel">
+  <h2>Secondary diagnostic: reversals vs state boundaries</h2>
+  <p class="muted">Not the primary success criterion — shown only as context.
+    {{ boundary.reversals_near_boundary }} / {{ boundary.reversals_total }} reversals
+    ({{ boundary.pct }}%) occur within 3 bars of a cluster boundary;
+    random baseline ≈ {{ boundary.baseline_pct }}%.</p>
+  <table>
+    <thead><tr><th>Cl</th><th>RevUp</th><th>RevDown</th><th>Rev rate</th><th>Lift vs global</th></tr></thead>
+    <tbody>
+    {% for s in stats %}
+    {% if s.total %}
+    <tr>
+      <td><b>{{ s.cluster }}</b></td>
+      <td>{{ s.reversal_up }}</td>
+      <td>{{ s.reversal_down }}</td>
+      <td>{{ s.reversal_rate }}%</td>
+      <td>{{ s.global_reversal_lift }}x</td>
+    </tr>
+    {% endif %}
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+{% if pair_rows %}
+<section class="panel">
+  <h2>Pair concentration (sampled embeddings)</h2>
+  <p class="muted">From embeddings.json sample — indicative only. Top share &gt; 70% =
+    cluster likely encodes instrument identity, not a transferable market state.
+    Entropy 1.0 = perfectly mixed across pairs.</p>
+  <table>
+    <thead><tr><th>Cl</th><th>Points</th><th>Top pair</th><th>Top share</th><th>Pairs</th><th>Entropy</th><th>Pair-specific?</th><th>Shares</th></tr></thead>
+    <tbody>
+    {% for r in pair_rows %}
+    <tr>
+      {% if r.total %}
+      <td><b>{{ r.cluster }}</b></td>
+      <td>{{ "{:,}".format(r.total) }}</td>
+      <td>{{ r.top_pair }}</td>
+      <td>{{ r.top_share }}%</td>
+      <td>{{ r.n_pairs }}</td>
+      <td>{{ r.entropy_norm }}</td>
+      <td>{% if r.likely_pair_specific %}<b>yes</b>{% else %}no{% endif %}</td>
+      <td><small>{% for p, sh in r.shares.items() %}{{ p }} {{ sh }}%{% if not loop.last %}, {% endif %}{% endfor %}</small></td>
+      {% else %}
+      <td><b>{{ r.cluster }}</b></td><td colspan="7" class="muted">no points</td>
+      {% endif %}
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+{% endblock %}

@@ -1000,3 +1000,75 @@ def clustermap_page(request: Request, run_id: str, symbol: str, timeframe: str):
             colors_json=json.dumps(colors),
         ),
     )
+
+
+def _pair_composition(emb_path: Path, n_clusters: int) -> list[dict] | None:
+    """Cluster/pair concentration from the sampled embeddings artifact."""
+    if not emb_path.exists():
+        return None
+    with open(emb_path) as f:
+        emb = json.load(f)
+    points = emb.get("points", {})
+    pairs = points.get("pair")
+    clusters = points.get("cluster")
+    if not pairs or not clusters:
+        return None
+    import math
+    rows = []
+    for c in range(n_clusters):
+        counts: dict[str, int] = {}
+        for p, cl in zip(pairs, clusters, strict=False):
+            if cl == c:
+                counts[p] = counts.get(p, 0) + 1
+        total = sum(counts.values())
+        if not total:
+            rows.append({"cluster": c, "total": 0})
+            continue
+        top_pair, top_n = max(counts.items(), key=lambda kv: kv[1])
+        shares = [v / total for v in counts.values()]
+        entropy = -sum(s * math.log(s) for s in shares)
+        max_entropy = math.log(len(counts)) if len(counts) > 1 else 1.0
+        rows.append({
+            "cluster": c,
+            "total": total,
+            "top_pair": top_pair,
+            "top_share": round(top_n / total * 100, 1),
+            "n_pairs": len(counts),
+            "entropy_norm": round(entropy / max_entropy, 3),
+            "likely_pair_specific": top_n / total > 0.7,
+            "shares": {k: round(v / total * 100, 1) for k, v in sorted(
+                counts.items(), key=lambda kv: kv[1], reverse=True)},
+        })
+    return rows
+
+
+@router.get("/v2/clusterstats/{run_id}/{symbol}/{timeframe}")
+def clusterstats_page(request: Request, run_id: str, symbol: str, timeframe: str):
+    """Numeric market-state analysis of embedding clusters (tables only)."""
+    cm_path = _pretrain_dir(request) / run_id / f"clustermap_{symbol}_{timeframe}.json"
+    if not cm_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Cluster analysis not found. Run 'Build state report' first.")
+    with open(cm_path) as f:
+        data = json.load(f)
+    if data.get("schema_version") != 2:
+        raise HTTPException(
+            status_code=409,
+            detail="Old artifact schema. Rebuild the state report to get numeric analysis.")
+    emb_path = _pretrain_dir(request) / run_id / "embeddings.json"
+    return templates.TemplateResponse(
+        request,
+        "clusterstats.html",
+        context(
+            request,
+            run_id=run_id, symbol=symbol, timeframe=timeframe,
+            meta=data["run_metadata"],
+            n_bars=data["n_bars"],
+            n_clusters=data["n_clusters"],
+            stats=data["cluster_stats"],
+            transitions=data["transitions"],
+            boundary=data["boundary_stats"],
+            pair_rows=_pair_composition(emb_path, data["n_clusters"]),
+        ),
+    )
