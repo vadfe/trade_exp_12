@@ -5,6 +5,7 @@ from trade_exp_12.model.run_cluster_map import (
     add_interpretations,
     boundary_reversal_stats,
     cluster_feature_stats,
+    oos_signal_stats,
     segment_lengths,
     transition_counts,
 )
@@ -91,6 +92,28 @@ def test_add_interpretations_labels_extrema():
     assert "high relative volume" in stats[1]["interpretation"]
     assert "downward directional" in stats[1]["interpretation"]
     assert "transition/noise-prone" in stats[1]["interpretation"]
+
+
+def test_oos_signal_stats_last_segment():
+    # 100 bars: first 80 quiet cluster 0, last 20 mixed — cluster 9 has all reversals
+    bars = (
+        [{"cluster": 0, "label": 0, "open_time": f"2026-01-01T{i:02d}"} for i in range(80)]
+        + [{"cluster": 9 if i % 2 else 0, "label": 1 if i % 2 else 0,
+            "open_time": f"2026-01-01T{i}"} for i in range(80, 100)]
+    )
+    res = oos_signal_stats(bars, test_frac=0.2)
+    assert res["test_bars"] == 20
+    by_cl = {r["cluster"]: r for r in res["rows"]}
+    assert by_cl[9]["bars"] == 10
+    assert by_cl[9]["reversals"] == 10
+    assert by_cl[9]["rate"] == 100.0
+    assert by_cl[9]["lift"] > 1.5
+    assert by_cl[0]["lift"] == 0.0
+
+
+def test_oos_signal_stats_empty():
+    res = oos_signal_stats([], test_frac=0.2)
+    assert res["rows"] == []
 
 
 def test_add_interpretations_empty():

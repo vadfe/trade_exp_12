@@ -23,12 +23,12 @@
     <input type="hidden" name="model_symbol" value="{{ model_symbol }}">
     <input type="hidden" name="model_timeframe" value="{{ model_timeframe }}">
     <label>Пара <select name="target_symbol">
-      {% for s in config.universe.symbols %}
+      {% for s in config.moex.symbols %}
       <option {% if s == target_symbol %}selected{% endif %}>{{ s }}</option>
       {% endfor %}
     </select></label>
     <label>TF <select name="target_timeframe">
-      {% for t in config.universe.timeframes %}
+      {% for t in config.moex.timeframes %}
       <option {% if t == target_timeframe %}selected{% endif %}>{{ t }}</option>
       {% endfor %}
     </select></label>

@@ -12,29 +12,18 @@
 <!-- PRETRAIN SECTION -->
 <section class="panel">
   <h2>1. Pretrain encoder (MAE)</h2>
-  <p>Trains on ALL processed pairs. No labels needed.</p>
+  <p>Self-supervised pretraining on MOEX shares (tail masking). No labels needed.</p>
   <form method="post" action="/v2/pretrain/run" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
-    <label>Data
-      <select name="source" style="width:90px">
-        <option value="all">all</option>
-        <option value="bybit">bybit</option>
-        <option value="moex" selected>moex</option>
-      </select>
-    </label>
-    <label>Only symbol
-      <select name="only_symbol" style="width:110px">
-        <option value="ALL" selected>ALL (pooled)</option>
+    <input type="hidden" name="source" value="moex">
+    <input type="hidden" name="mask_mode" value="tail">
+    <label>Instrument
+      <select name="only_symbol" style="width:130px">
+        <option value="ALL" selected>all shares (pooled)</option>
         {% for s in all_symbols %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
       </select>
     </label>
     <label>Window <input type="number" name="window_size" value="64" min="16" max="256" style="width:70px"></label>
     <label>Epochs <input type="number" name="epochs" value="50" min="1" max="500" style="width:70px"></label>
-    <label>Mask mode
-      <select name="mask_mode" style="width:110px">
-        <option value="random">random</option>
-        <option value="tail" selected>tail</option>
-      </select>
-    </label>
     <label>Forecast bars <input type="number" name="forecast_bars" value="8" min="1" max="32" style="width:70px" title="For tail mode: how many last bars to predict"></label>
     <label>Mask ratio <input type="number" name="mask_ratio" value="0.4" step="0.05" min="0.1" max="0.8" style="width:70px" title="For random mode only"></label>
     <label>d_model <input type="number" name="d_model" value="64" min="16" max="512" style="width:70px"></label>
@@ -51,12 +40,12 @@
 <section class="panel">
   <h2>Pretrained encoders</h2>
   <table>
-    <thead><tr><th>Run ID</th><th>Pairs</th><th>Windows</th><th>Best Val Loss</th><th>Epochs</th><th>d_model</th><th>Mask mode</th><th>Forecast</th><th></th></tr></thead>
+    <thead><tr><th>Run ID</th><th>Instrument</th><th>Windows</th><th>Best Val Loss</th><th>Epochs</th><th>d_model</th><th>Mask mode</th><th>Forecast</th><th></th></tr></thead>
     <tbody>
     {% for run in pretrain_runs %}
     <tr>
       <td><small>{{ run.run_id }}</small></td>
-      <td>{{ run.info.get('n_pairs', '?') }}</td>
+      <td><b>{{ run.pairs_label }}</b></td>
       <td>{{ "{:,}".format(run.info.get('total_windows', 0)) }}</td>
       <td><b>{{ "%.5f"|format(run.best_val_loss) }}</b></td>
       <td>{{ run.hyperparameters.get('epochs', '?') }}</td>
@@ -71,21 +60,6 @@
     {% endfor %}
     </tbody>
   </table>
-</section>
-
-<!-- EMBEDDINGS SECTION -->
-<section class="panel">
-  <h2>1b. Analyze embeddings</h2>
-  <p>Extract embeddings from encoder, visualize t-SNE, find clusters.</p>
-  <form method="post" action="/v2/embeddings/run" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
-    <label>Encoder <select name="pretrain_run_id">
-      {% for run in pretrain_runs %}<option value="{{ run.run_id }}">{{ run.run_id }} [{{ run.pairs_label }}]</option>{% endfor %}
-    </select></label>
-    <label>Clusters <input type="number" name="n_clusters" value="8" min="2" max="50" style="width:70px"></label>
-    <label>Max windows <input type="number" name="max_windows" value="20000" min="1000" max="100000" style="width:90px"></label>
-    <label>ATR mult <input type="number" name="atr_multiplier" value="3.0" step="0.5" min="0.5" max="20" style="width:70px"></label>
-    <button type="submit">Analyze</button>
-  </form>
 </section>
 
 <!-- CLUSTER STATE ANALYSIS SECTION -->
@@ -110,15 +84,13 @@
     <label>ATR mult <input type="number" name="atr_multiplier" value="3.0" step="0.5" min="0.5" max="20" style="width:70px"></label>
     <button type="submit">Build state report</button>
   </form>
-  {% for run in pretrain_runs %}
-  <p><small>{{ run.run_id }}:
-    {% for s in all_symbols %}
-      {% for t in all_timeframes %}
-        <a href="/v2/clusterstats/{{ run.run_id }}/{{ s }}/{{ t }}">{{ s }} {{ t }}m</a>
-      {% endfor %}
+  {% if cluster_maps %}
+  <p><small>Existing reports:
+    {% for m in cluster_maps %}
+      <a href="/v2/clusterstats/{{ m.run_id }}/{{ m.symbol }}/{{ m.timeframe }}">{{ m.symbol }} ({{ m.run_id }})</a>
     {% endfor %}
   </small></p>
-  {% endfor %}
+  {% endif %}
 </section>
 {% endif %}
 

@@ -48,15 +48,15 @@ class UniverseConfig(BaseModel):
     @classmethod
     def validate_symbols(cls, values: list[str]) -> list[str]:
         normalized = [value.strip().upper() for value in values]
-        if not normalized or len(normalized) != len(set(normalized)):
-            raise ValueError("Symbols must be non-empty and unique")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("Symbols must be unique")
         return normalized
 
     @field_validator("timeframes")
     @classmethod
     def validate_timeframes(cls, values: list[str]) -> list[str]:
         supported = {"1", "3", "5", "15", "30", "60", "120", "240", "360", "720", "D", "W", "M"}
-        if not values or any(value not in supported for value in values):
+        if any(value not in supported for value in values):
             raise ValueError("Unsupported Bybit timeframe")
         return values
 

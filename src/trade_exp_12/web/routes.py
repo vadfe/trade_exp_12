@@ -622,14 +622,12 @@ def _pretrain_dir(request: Request) -> Path:
 
 
 def _all_parquet_paths(request: Request, symbols: list[str] | None = None) -> list[str]:
-    """Absolute paths of the latest processed parquet for every configured
-    instrument — Bybit universe plus MOEX shares."""
+    """Absolute paths of the latest processed parquet for each configured
+    MOEX instrument."""
     settings = request.app.state.config.settings
     registry = request.app.state.registry
-    combos = [(s, tf) for s in settings.universe.symbols
-              for tf in settings.universe.timeframes]
-    combos += [(s, tf) for s in settings.moex.symbols
-               for tf in settings.moex.timeframes]
+    combos = [(s, tf) for s in settings.moex.symbols
+              for tf in settings.moex.timeframes]
     if symbols is not None:
         wanted = set(symbols)
         combos = [(s, tf) for s, tf in combos if s in wanted]
@@ -644,16 +642,6 @@ def _all_parquet_paths(request: Request, symbols: list[str] | None = None) -> li
     return paths
 
 
-def _all_symbols(request: Request) -> tuple[list[str], list[str]]:
-    """(symbols, timeframes) across Bybit universe + MOEX shares."""
-    settings = request.app.state.config.settings
-    symbols = list(settings.universe.symbols) + [
-        s for s in settings.moex.symbols if s not in settings.universe.symbols]
-    timeframes = list(settings.universe.timeframes) + [
-        tf for tf in settings.moex.timeframes if tf not in settings.universe.timeframes]
-    return symbols, timeframes
-
-
 def _experiments_v2_dir(request: Request) -> Path:
     return request.app.state.config.root / "data" / "experiments_v2"
 
@@ -661,6 +649,7 @@ def _experiments_v2_dir(request: Request) -> Path:
 @router.get("/v2/experiments")
 def experiments_v2_page(request: Request):
     """v2 experiments: MAE pretrain + finetune."""
+    settings = request.app.state.config.settings
     pretrain_root = _pretrain_dir(request)
     pretrain_runs = []
     if pretrain_root.exists():
@@ -670,6 +659,9 @@ def experiments_v2_page(request: Request):
                 with open(report_path) as f:
                     report = json.load(f)
                 pairs = report.get("info", {}).get("pairs", [])
+                instruments = {p.split("/")[0] for p in pairs}
+                if instruments and instruments.isdisjoint(settings.moex.symbols):
+                    continue  # skip obsolete crypto-only runs
                 pretrain_runs.append({
                     "run_id": run_dir.name,
                     "info": report.get("info", {}),
@@ -683,7 +675,7 @@ def experiments_v2_page(request: Request):
     finetune_runs = []
     if exp_root.exists():
         for sym_dir in sorted(exp_root.iterdir()):
-            if not sym_dir.is_dir():
+            if not sym_dir.is_dir() or sym_dir.name not in settings.moex.symbols:
                 continue
             for tf_dir in sorted(sym_dir.iterdir()):
                 if not tf_dir.is_dir():
@@ -704,6 +696,20 @@ def experiments_v2_page(request: Request):
                             "path": str(run_dir),
                         })
 
+    # Existing cluster-state report artifacts per run (for links that work)
+    cluster_maps = []
+    for run in pretrain_runs:
+        run_dir = Path(run["path"])
+        for artifact in sorted(run_dir.glob("clustermap_*.json")):
+            stem = artifact.stem  # clustermap_{SYMBOL}_{TF}
+            parts = stem.split("_")
+            if len(parts) == 3 and parts[1] in settings.moex.symbols:
+                cluster_maps.append({
+                    "run_id": run["run_id"],
+                    "symbol": parts[1],
+                    "timeframe": parts[2],
+                })
+
     return templates.TemplateResponse(
         request,
         "experiments_v2.html",
@@ -711,8 +717,9 @@ def experiments_v2_page(request: Request):
             request,
             pretrain_runs=pretrain_runs,
             finetune_runs=finetune_runs,
-            all_symbols=_all_symbols(request)[0],
-            all_timeframes=_all_symbols(request)[1],
+            cluster_maps=cluster_maps,
+            all_symbols=list(settings.moex.symbols),
+            all_timeframes=list(settings.moex.timeframes),
         ),
     )
 
@@ -731,21 +738,18 @@ async def start_pretrain(
     d_ff: int = Form(256),
     lr: float = Form(0.001),
     batch_size: int = Form(256),
-    source: str = Form("all"),
     only_symbol: str = Form("ALL"),
 ):
-    """Launch MAE pretraining; ``source`` picks all/bybit/moex, ``only_symbol``
-    can restrict to a single instrument for per-instrument runs."""
+    """Launch MAE pretraining on MOEX shares; ``only_symbol`` can restrict to
+    a single instrument for per-instrument runs."""
     registry = request.app.state.registry
     settings = request.app.state.config.settings
 
-    # Collect processed parquets, optionally restricted
-    symbols: list[str] | None = None
-    if source == "bybit":
-        symbols = list(settings.universe.symbols)
-    elif source == "moex":
-        symbols = list(settings.moex.symbols)
+    # Collect processed parquets (MOEX universe only)
+    symbols: list[str] | None = list(settings.moex.symbols)
     if only_symbol != "ALL":
+        if only_symbol not in settings.moex.symbols:
+            raise HTTPException(status_code=400, detail="Unknown MOEX instrument")
         symbols = [only_symbol]
     parquet_paths = _all_parquet_paths(request, symbols)
 
@@ -757,7 +761,7 @@ async def start_pretrain(
     output_dir = _pretrain_dir(request) / stamp
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    job_id = registry.create_job("pretrain_v2", only_symbol, source)
+    job_id = registry.create_job("pretrain_v2", only_symbol, "moex")
     db_path = str(registry.path)
 
     cmd = [
@@ -796,6 +800,9 @@ async def start_finetune(
     freeze_encoder: bool = Form(True),
 ):
     """Launch finetuning of pretrained encoder on one pair."""
+    settings = request.app.state.config.settings
+    if symbol not in settings.moex.symbols or timeframe not in settings.moex.timeframes:
+        raise HTTPException(status_code=400, detail="Unknown MOEX instrument")
     pretrain_root = _pretrain_dir(request) / pretrain_run_id
     encoder_path = pretrain_root / "encoder.pt"
     if not encoder_path.exists():
@@ -970,6 +977,9 @@ async def start_clustermap(
     atr_multiplier: float = Form(3.0),
 ):
     """Build a per-bar cluster map for one pair/timeframe."""
+    settings = request.app.state.config.settings
+    if symbol not in settings.moex.symbols or timeframe not in settings.moex.timeframes:
+        raise HTTPException(status_code=400, detail="Unknown MOEX instrument")
     pretrain_root = _pretrain_dir(request) / pretrain_run_id
     encoder_path = pretrain_root / "encoder.pt"
     report_path = pretrain_root / "report.json"
@@ -1083,6 +1093,12 @@ def _pair_composition(emb_path: Path, n_clusters: int) -> list[dict] | None:
 @router.get("/v2/clusterstats/{run_id}/{symbol}/{timeframe}")
 def clusterstats_page(request: Request, run_id: str, symbol: str, timeframe: str):
     """Numeric market-state analysis of embedding clusters (tables only)."""
+    settings = request.app.state.config.settings
+    if symbol not in settings.moex.symbols or timeframe not in settings.moex.timeframes:
+        raise HTTPException(
+            status_code=404,
+            detail=f"{symbol}/{timeframe} is not a configured MOEX instrument. "
+                   "This link is likely from an obsolete crypto run.")
     cm_path = _pretrain_dir(request) / run_id / f"clustermap_{symbol}_{timeframe}.json"
     if not cm_path.exists():
         raise HTTPException(
@@ -1095,6 +1111,8 @@ def clusterstats_page(request: Request, run_id: str, symbol: str, timeframe: str
             status_code=409,
             detail="Old artifact schema. Rebuild the state report to get numeric analysis.")
     emb_path = _pretrain_dir(request) / run_id / "embeddings.json"
+    from trade_exp_12.model.run_cluster_map import oos_signal_stats
+    oos = oos_signal_stats(data.get("bars", []))
     return templates.TemplateResponse(
         request,
         "clusterstats.html",
@@ -1108,5 +1126,6 @@ def clusterstats_page(request: Request, run_id: str, symbol: str, timeframe: str
             transitions=data["transitions"],
             boundary=data["boundary_stats"],
             pair_rows=_pair_composition(emb_path, data["n_clusters"]),
+            oos=oos,
         ),
     )

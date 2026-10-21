@@ -1,11 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Данные — Trade Experiment 12{% endblock %}
 {% block content %}
-<section class="hero"><div><span class="eyebrow">Этап 1</span><h1>Данные Bybit</h1><p>Spot OHLCV, отдельные версии для каждой пары и таймфрейма.</p></div><div class="metric"><b>{{ latest|length }}</b><span>готовых наборов</span></div></section>
+<section class="hero"><div><span class="eyebrow">Этап 1</span><h1>Данные</h1><p>Часовые свечи Мосбиржи (MOEX ISS), отдельные версии для каждого инструмента.</p></div><div class="metric"><b>{{ latest|length }}</b><span>готовых наборов</span></div></section>
+{% if config.universe.symbols %}
 <section class="panel">
 <table><thead><tr><th>Пара</th>{% for timeframe in config.universe.timeframes %}<th>{{ timeframe }} мин</th>{% endfor %}</tr></thead><tbody>
 {% for symbol in config.universe.symbols %}<tr><th>{{ symbol }}</th>{% for timeframe in config.universe.timeframes %}{% set item = latest.get((symbol, timeframe)) %}<td>{% if item %}<a class="dataset-link" href="/data/{{ symbol }}/{{ timeframe }}"><b>{{ "{:,}".format(item['row_count']) }}</b><small>{{ item['first_open_time'][:10] }} — {{ item['last_open_time'][:10] }}</small><small>{{ item['gap_count'] }} gaps</small></a>{% else %}<form method="post" action="/data/download"><input type="hidden" name="symbol" value="{{ symbol }}"><input type="hidden" name="timeframe" value="{{ timeframe }}"><button>Загрузить</button></form>{% endif %}</td>{% endfor %}</tr>{% endfor %}
 </tbody></table></section>
+{% endif %}
 <section class="panel"><h2>Акции MOEX</h2><p class="muted">Часовые свечи Мосбиржи (ISS API, без токена). После загрузки нажмите «Обработать» на странице набора.</p>
 <table><thead><tr><th>Инструмент</th>{% for timeframe in config.moex.timeframes %}<th>{{ timeframe }} мин</th>{% endfor %}</tr></thead><tbody>
 {% for symbol in config.moex.symbols %}<tr><th>{{ symbol }}</th>{% for timeframe in config.moex.timeframes %}{% set item = latest.get((symbol, timeframe)) %}<td>{% if item %}<a class="dataset-link" href="/data/{{ symbol }}/{{ timeframe }}"><b>{{ "{:,}".format(item['row_count']) }}</b><small>{{ item['first_open_time'][:10] }} — {{ item['last_open_time'][:10] }}</small><small>{{ item['gap_count'] }} gaps</small></a>{% else %}<form method="post" action="/moex/download"><input type="hidden" name="symbol" value="{{ symbol }}"><input type="hidden" name="timeframe" value="{{ timeframe }}"><button>Загрузить</button></form>{% endif %}</td>{% endfor %}</tr>{% endfor %}

@@ -121,6 +121,29 @@
   </table>
 </section>
 
+<section class="panel">
+  <h2>Out-of-sample check (last 20% of history)</h2>
+  <p class="muted">Reversal rate per cluster on the final {{ oos.test_bars }} bars —
+    the segment the statistics above were not measured on.
+    Lift &gt; 1.5 with enough bars (≥200) is the candidate signal.
+    Global test reversal rate: {{ oos.global_rate }}% ({{ oos.test_reversals }} reversals).</p>
+  <table>
+    <thead><tr><th>Cl</th><th>Bars</th><th>Reversals</th><th>Rate</th><th>Lift</th><th>Verdict</th></tr></thead>
+    <tbody>
+    {% for r in oos.rows %}
+    <tr>
+      <td><b>{{ r.cluster }}</b></td>
+      <td>{{ "{:,}".format(r.bars) }}</td>
+      <td>{{ r.reversals }}</td>
+      <td>{{ r.rate }}%</td>
+      <td>{{ r.lift }}x</td>
+      <td>{% if r.lift >= 1.5 and r.bars >= 200 %}<b>candidate</b>{% elif r.bars < 200 %}<span class="muted">too few bars</span>{% else %}no{% endif %}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
 {% if pair_rows %}
 <section class="panel">
   <h2>Pair concentration (sampled embeddings)</h2>

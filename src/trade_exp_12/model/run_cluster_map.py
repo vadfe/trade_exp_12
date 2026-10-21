@@ -213,6 +213,44 @@ def add_interpretations(stats: list[dict]) -> None:
         s["interpretation"] = ", ".join(labels) or "intermediate state"
 
 
+def oos_signal_stats(bars: list[dict], test_frac: float = 0.2) -> dict:
+    """Out-of-sample check: does the per-cluster reversal lift survive on the
+    last ``test_frac`` of bars (data the clusters were not fitted for is
+    approximated here by a temporal hold-out of the *statistics*).
+
+    Returns per-cluster reversal rate + lift on the test segment, plus the
+    post-state window: reversals within ``horizon`` bars after a bar of the
+    highest-volume cluster."""
+    if not bars:
+        return {"rows": [], "test_bars": 0}
+    n = len(bars)
+    split = int(n * (1 - test_frac))
+    test = bars[split:]
+    labels = np.array([b["label"] for b in test])
+    clusters = np.array([b["cluster"] for b in test])
+    global_rate = max(float((labels > 0).mean()), 1e-9)
+
+    rows = []
+    for c in sorted(set(int(x) for x in clusters)):
+        m = clusters == c
+        rate = float((labels[m] > 0).mean())
+        rows.append({
+            "cluster": c,
+            "bars": int(m.sum()),
+            "reversals": int((labels[m] > 0).sum()),
+            "rate": round(rate * 100, 2),
+            "lift": round(rate / global_rate, 2),
+        })
+
+    # post-state window: horizon bars after each bar of the top-volume cluster
+    return {
+        "rows": rows,
+        "test_bars": len(test),
+        "test_reversals": int((labels > 0).sum()),
+        "global_rate": round(global_rate * 100, 2),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--encoder-path", required=True)

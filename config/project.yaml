@@ -19,22 +19,20 @@ moex:
     - SBER
     - GAZP
     - LKOH
+    - MGNT
+    - NVTK
+    - ROSN
+    - TATN
+    - PLZL
+    - SNGS
+    - VTBR
   timeframes:
     - "60"
   history_years: 8
 
 universe:
-  symbols:
-    - BRETTUSDT
-    - IMXUSDT
-    - NEARUSDT
-    - OPUSDT
-    - ARBUSDT
-    - ADAUSDT
-    - PEPEUSDT
-  timeframes:
-    - "15"
-    - "60"
+  symbols: []
+  timeframes: []
   history_years: 4
 
 storage:
