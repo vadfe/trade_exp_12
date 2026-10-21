@@ -11,6 +11,26 @@ from trade_exp_12.model.run_cluster_map import (
 )
 
 
+def test_tail_forecast_does_not_see_future():
+    import torch
+
+    from trade_exp_12.model.transformer_v2 import MarketMAE
+
+    torch.manual_seed(7)
+    model = MarketMAE(
+        n_features=3, d_model=8, n_encoder_layers=1, n_decoder_layers=1,
+        d_ff=16, dropout=0.0, mask_mode="tail", forecast_bars=2,
+    ).eval()
+    original = torch.randn(2, 8, 3)
+    changed = original.clone()
+    changed[:, -2:] = torch.randn(2, 2, 3) * 100
+    with torch.no_grad():
+        first, _, mask = model.pretrain_forward(original)
+        second, _, _ = model.pretrain_forward(changed)
+    assert mask[:, -2:].all()
+    torch.testing.assert_close(first, second)
+
+
 def test_segment_lengths_runs():
     cl = np.array([0, 0, 0, 1, 1, 0, 2, 2, 2, 2])
     seg_cl, seg_len = segment_lengths(cl)

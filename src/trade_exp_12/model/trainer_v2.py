@@ -64,9 +64,16 @@ def pretrain(
 
     # 90/10 train/val split (random, not temporal — pretraining is unsupervised)
     n_total = len(dataset)
-    n_val = max(1, int(n_total * 0.1))
-    n_train = n_total - n_val
-    train_ds, val_ds = torch.utils.data.random_split(dataset, [n_train, n_val])
+    if info.n_pairs != 1:
+        raise ValueError("Forecast training requires exactly one instrument")
+    train_end = int(n_total * 0.7)
+    val_start = train_end + info.window_size - 1
+    val_end = int(n_total * 0.85)
+    test_start = val_end + info.window_size - 1
+    if not 0 < train_end < val_start < val_end < test_start < n_total:
+        raise ValueError("Insufficient history for purged chronological train/val/test")
+    train_ds = torch.utils.data.Subset(dataset, range(train_end))
+    val_ds = torch.utils.data.Subset(dataset, range(val_start, val_end))
 
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
@@ -151,6 +158,11 @@ def pretrain(
     # Save report
     report = {
         "type": "pretrain",
+        "forecast_protocol": 2,
+        "split": {
+            "train_end": train_end, "val_start": val_start, "val_end": val_end,
+            "test_start": test_start, "total_windows": n_total,
+        },
         "info": asdict(info),
         "epochs": [asdict(m) for m in epoch_metrics],
         "best_val_loss": round(best_val_loss, 5),

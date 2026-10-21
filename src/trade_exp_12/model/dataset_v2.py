@@ -18,7 +18,6 @@ from trade_exp_12.model.dataset import (
     FEATURE_COLUMNS,
     PatchDataset,
     SplitInfo,
-    add_reversal_labels,
     build_windows,
 )
 
@@ -56,8 +55,7 @@ def _load_pair_windows(
     frame = pd.read_parquet(p)
     # Add reversal labels to get feature_ready column
     # (ATR computation populates feature_ready)
-    labeled = add_reversal_labels(frame, atr_multiplier=3.0)
-    ready = labeled[labeled["feature_ready"]].reset_index(drop=True)
+    ready = frame[frame["feature_ready"]].reset_index(drop=True)
 
     features = ready[FEATURE_COLUMNS].values.astype(np.float32)
     features = np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)
@@ -92,8 +90,7 @@ def prepare_pretrain_dataset(
 
     combined = np.concatenate(all_windows, axis=0)
     # Shuffle to mix pairs
-    rng = np.random.RandomState(42)
-    perm = rng.permutation(len(combined))
+    perm = np.arange(len(combined))
     combined = combined[perm]
 
     info = PretrainInfo(

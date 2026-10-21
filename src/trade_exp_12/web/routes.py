@@ -666,6 +666,9 @@ def experiments_v2_page(request: Request):
                     "run_id": run_dir.name,
                     "info": report.get("info", {}),
                     "pairs_label": ", ".join(pairs) if pairs else "?",
+                    "forecast_ready": report.get("forecast_protocol") == 2 and len(pairs) == 1,
+                    "symbol": pairs[0].split("/")[0] if len(pairs) == 1 else "",
+                    "timeframe": pairs[0].split("/")[-1] if len(pairs) == 1 else "",
                     "best_val_loss": report.get("best_val_loss"),
                     "hyperparameters": report.get("hyperparameters", {}),
                     "path": str(run_dir),
@@ -710,6 +713,18 @@ def experiments_v2_page(request: Request):
                     "timeframe": parts[2],
                 })
 
+    forecast_reports = []
+    for run in pretrain_runs:
+        run_dir = Path(run["path"])
+        for artifact in sorted(run_dir.glob("forecast_*.json")):
+            parts = artifact.stem.split("_")
+            if len(parts) == 3 and parts[1] in settings.moex.symbols:
+                forecast_reports.append({
+                    "run_id": run["run_id"],
+                    "symbol": parts[1],
+                    "timeframe": parts[2],
+                })
+
     return templates.TemplateResponse(
         request,
         "experiments_v2.html",
@@ -718,6 +733,7 @@ def experiments_v2_page(request: Request):
             pretrain_runs=pretrain_runs,
             finetune_runs=finetune_runs,
             cluster_maps=cluster_maps,
+            forecast_reports=forecast_reports,
             all_symbols=list(settings.moex.symbols),
             all_timeframes=list(settings.moex.timeframes),
         ),
@@ -730,7 +746,7 @@ async def start_pretrain(
     window_size: int = Form(64),
     epochs: int = Form(50),
     mask_ratio: float = Form(0.4),
-    mask_mode: str = Form("random"),
+    mask_mode: str = Form("tail"),
     forecast_bars: int = Form(8),
     d_model: int = Form(64),
     n_encoder_layers: int = Form(4),
@@ -746,12 +762,14 @@ async def start_pretrain(
     settings = request.app.state.config.settings
 
     # Collect processed parquets (MOEX universe only)
-    symbols: list[str] | None = list(settings.moex.symbols)
-    if only_symbol != "ALL":
-        if only_symbol not in settings.moex.symbols:
-            raise HTTPException(status_code=400, detail="Unknown MOEX instrument")
-        symbols = [only_symbol]
-    parquet_paths = _all_parquet_paths(request, symbols)
+    if only_symbol not in settings.moex.symbols or mask_mode != "tail":
+        raise HTTPException(status_code=400, detail="Выберите одну акцию MOEX и режим tail")
+    parquet_paths = _all_parquet_paths(request, [only_symbol])
+    if len(parquet_paths) > 1:
+        raise HTTPException(status_code=400, detail="Для прогноза нужен один таймфрейм")
+    if any(not Path(p).is_file() for p in parquet_paths):
+        raise HTTPException(
+            status_code=404, detail="Файл данных отсутствует; обработайте данные снова")
 
     if not parquet_paths:
         raise HTTPException(status_code=404, detail="No processed datasets found")
@@ -1024,6 +1042,94 @@ async def start_clustermap(
     subprocess.Popen(cmd, env=env, cwd=str(request.app.state.config.root))
     logger.info("Spawned cluster map (job %d) %s %s", job_id, symbol, timeframe)
     return RedirectResponse(f"/jobs/{job_id}", status_code=303)
+
+
+@router.post("/v2/forecast/run")
+async def start_forecast_eval(
+    request: Request,
+    pretrain_run_id: str = Form(...),
+    symbol: str = Form(...),
+    timeframe: str = Form(...),
+    eval_windows: int = Form(3000),
+):
+    """Evaluate whether the MAE model actually forecasts the tail bars."""
+    from trade_exp_12.model.run_forecast_eval import validate_report
+
+    if Path(pretrain_run_id).name != pretrain_run_id or "\\" in pretrain_run_id:
+        raise HTTPException(status_code=400, detail="Invalid run ID")
+    settings = request.app.state.config.settings
+    if symbol not in settings.moex.symbols or timeframe not in settings.moex.timeframes:
+        raise HTTPException(status_code=400, detail="Unknown MOEX instrument")
+    pretrain_root = _pretrain_dir(request) / pretrain_run_id
+    encoder_path = pretrain_root / "encoder.pt"
+    report_path = pretrain_root / "report.json"
+    if not encoder_path.exists() or not report_path.exists():
+        raise HTTPException(status_code=404, detail="Pretrained encoder not found")
+    report = json.loads(report_path.read_text())
+    try:
+        validate_report(report, symbol, timeframe)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    registry = request.app.state.registry
+    target_rec = registry.latest_processed(symbol, timeframe)
+    if target_rec is None:
+        raise HTTPException(status_code=404, detail=f"No processed data for {symbol} {timeframe}m")
+    target_path = target_rec["path"]
+    if not Path(target_path).is_absolute():
+        target_path = str(request.app.state.config.root / target_path)
+
+    if not Path(target_path).is_file():
+        raise HTTPException(
+            status_code=404, detail="Файл данных отсутствует; обработайте данные снова")
+    output_path = pretrain_root / f"forecast_{symbol}_{timeframe}.json"
+    job_id = registry.create_job("forecast_eval_v2", symbol, timeframe)
+    db_path = str(registry.path)
+
+    cmd = [
+        sys.executable, "-m", "trade_exp_12.model.run_forecast_eval",
+        "--encoder-path", str(encoder_path),
+        "--pretrain-report", str(report_path),
+        "--target-parquet", target_path,
+        "--symbol", symbol,
+        "--timeframe", timeframe,
+        "--output", str(output_path),
+        "--eval-windows", str(max(100, min(eval_windows, 50000))),
+        "--db", db_path,
+        "--job-id", str(job_id),
+    ]
+    env = {**__import__("os").environ, "SMC_CREDIT": "0"}
+    subprocess.Popen(cmd, env=env, cwd=str(request.app.state.config.root))
+    logger.info("Spawned forecast eval (job %d) %s %s", job_id, symbol, timeframe)
+    return RedirectResponse(f"/jobs/{job_id}", status_code=303)
+
+
+@router.get("/v2/forecast/{run_id}/{symbol}/{timeframe}")
+def forecast_page(request: Request, run_id: str, symbol: str, timeframe: str):
+    """Forecast-quality report: predicted tail vs actual."""
+    settings = request.app.state.config.settings
+    if symbol not in settings.moex.symbols or timeframe not in settings.moex.timeframes:
+        raise HTTPException(status_code=404, detail="Unknown MOEX instrument")
+    fc_path = _pretrain_dir(request) / run_id / f"forecast_{symbol}_{timeframe}.json"
+    if not fc_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Forecast evaluation not found. Run 'Forecast test' first.")
+    with open(fc_path) as f:
+        data = json.load(f)
+    return templates.TemplateResponse(
+        request,
+        "forecast.html",
+        context(
+            request,
+            run_id=run_id, symbol=symbol, timeframe=timeframe,
+            meta=data["run_metadata"],
+            overall=data["metrics"]["overall"],
+            per_horizon=data["metrics"]["per_horizon"],
+            example=data["example"],
+            verdict=data["verdict"],
+        ),
+    )
 
 
 @router.get("/v2/clustermap/{run_id}/{symbol}/{timeframe}")

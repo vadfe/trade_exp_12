@@ -14,6 +14,8 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import logging
 import sqlite3
 import sys
@@ -97,6 +99,11 @@ def main() -> None:
             forecast_bars=args.forecast_bars,
             progress_callback=progress,
         )
+        report_path = Path(args.output_dir) / "report.json"
+        report = json.loads(report_path.read_text())
+        with open(args.parquets[0], "rb") as source:
+            report["dataset_sha256"] = hashlib.file_digest(source, "sha256").hexdigest()
+        report_path.write_text(json.dumps(report, indent=2))
         _update_job(
             args.db, args.job_id, "completed", 1.0,
             f"Pretrain done — best val_loss={result.epochs[-1].val_loss:.5f}",

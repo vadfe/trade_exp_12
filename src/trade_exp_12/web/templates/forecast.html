@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Проверка прогноза {{ symbol }} — {{ run_id }}{% endblock %}
+{% block head %}<script src="/vendor/plotly.min.js?v=6.3.0"></script>{% endblock %}
+{% block content %}
+<section class="hero"><div>
+  <span class="eyebrow">Проверка прогноза без подсматривания</span>
+  <h1>{{ symbol }} · {{ timeframe }} мин · {{ run_id }}</h1>
+  <p>Из {{ meta.window_size }} баров модель видит первые {{ meta.window_size - meta.forecast_bars }}.
+     Последние {{ meta.forecast_bars }} скрыты до encoder.
+     Проверено {{ meta.eval_windows }} окон из отложенных 15% истории;
+     прогнозируемые хвосты не пересекаются.</p>
+</div></section>
+<section class="panel">
+  <h2>Результат</h2>
+  {% if verdict == "better" %}
+  <p><b>На этом отрезке прогноз цены точнее неподвижной цены.</b>
+     Это преимущество по средней ошибке, а не доказательство прибыльной стратегии.</p>
+  {% else %}
+  <p><b>На этом отрезке модель не превзошла прогноз «цена не меняется».</b>
+     Качество восстановления признаков само по себе не подтверждает полезный прогноз цены.</p>
+  {% endif %}
+  <table><thead><tr><th>Средняя абсолютная ошибка цены, % от исходной цены</th><th>Модель</th><th>Цена не меняется</th></tr></thead>
+  <tbody><tr><td>По всем горизонтам</td><td>{{ "%.4f"|format(overall.price_mae) }}%</td><td>{{ "%.4f"|format(overall.flat_mae) }}%</td></tr></tbody></table>
+  <p>Чем меньше ошибка, тем лучше. Точность знака отдельной часовой доходности:
+     {{ "%.1f"|format(overall.direction_acc * 100) }}%.
+     Эта доля не сравнивается автоматически с 50%: классы могут быть несбалансированы.</p>
+  <p class="muted">Проверяется цена закрытия, восстановленная из log_return, а не весь OHLCV-бар.
+     Один отложенный отрезок — не гарантия устойчивости на новом рынке.</p>
+</section>
+<section class="panel">
+  <h2>Ошибка цены на каждом будущем баре</h2>
+  <table><thead><tr><th>Горизонт</th><th>Окон</th><th>Модель</th><th>Цена не меняется</th></tr></thead><tbody>
+  {% for r in per_horizon %}<tr><td>+{{ r.horizon }}</td><td>{{ r.n }}</td>
+    <td>{{ "%.4f"|format(r.price_mae) }}%</td><td>{{ "%.4f"|format(r.flat_mae) }}%</td></tr>{% endfor %}
+  </tbody></table>
+</section>
+<section class="panel">
+  <h2>Пример из проверенного отрезка: прогноз против реальности</h2>
+  <p>Все линии начинаются от последнего известного закрытия {{ example.anchor_close }}.
+     Пример иллюстративный, общий вывод считается по всем проверенным окнам.</p>
+  <div id="forecast-chart" style="height:400px"></div>
+  <table><thead><tr><th>Время</th><th>Реальное закрытие</th><th>Прогноз</th><th>Цена не меняется</th></tr></thead><tbody>
+  {% for i in range(example.times|length) %}<tr><td>{{ example.times[i][:16] }}</td>
+    <td>{{ example.actual_path[i + 1] }}</td><td>{{ example.predicted_path[i + 1] }}</td><td>{{ example.anchor_close }}</td></tr>{% endfor %}
+  </tbody></table>
+</section>
+<a class="button" href="/v2/experiments#forecast-reports">К моделям и отчётам</a>
+<script>
+const sample = {{ example|tojson }};
+const x = Array.from({length: sample.actual_path.length}, (_, i) => i);
+Plotly.newPlot('forecast-chart', [
+  {x, y: sample.actual_path, name: 'Реальное закрытие', mode: 'lines+markers'},
+  {x, y: sample.predicted_path, name: 'Прогноз модели', mode: 'lines+markers'},
+  {x, y: x.map(() => sample.anchor_close), name: 'Цена не меняется', mode: 'lines'}
+], {xaxis: {title: 'Будущий бар (0 — последняя известная цена)'}, yaxis: {title: 'Цена закрытия'}}, {responsive: true});
+</script>
+{% endblock %}

@@ -167,7 +167,7 @@ class MarketMAE(nn.Module):
         mask = self._generate_mask(B, W, device)  # [B, W]
 
         # Embed all positions
-        h = self.patch_embed(x)  # [B, W, D]
+        h = self.patch_embed(x.masked_fill(mask.unsqueeze(-1), 0.0))  # [B, W, D]
 
         # Add CLS token
         cls = self.cls_token.expand(B, -1, -1)
