@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Обучающий пример {{ data.symbol }}{% endblock %}
+{% block head %}<script src="/vendor/plotly.min.js?v=6.3.0"></script>{% endblock %}
+{% block content %}
+<section class="hero"><div><span class="eyebrow">Этап 2 · вход и цель обучения</span>
+<h1>{{ data.symbol }} · {{ data.timeframe }} мин · пример {{ data.index }}</h1>
+<p>Вход: {{ data.context_size }} известных баров × {{ data.feature_columns|length }} признака.
+Цель: {{ data.horizon }} будущих бара × 4 цены OHLC. Это подготовленные данные, не прогноз модели.</p></div></section>
+<section class="panel">
+<p>Исходная версия: {{ data.raw_version }}. Признаки: {{ data.feature_set }}, {{ data.processed_version }}.</p>
+<p style="overflow-wrap:anywhere">SHA-256 признаков: {{ data.processed_checksum }}.</p>
+<p>Известный контекст допущен не ранее {{ data.context_available_at or 'не указано' }} UTC.
+Из-за задержки ISS следующий торговый бар в этот момент может уже идти;
+его прошедшее открытие нельзя использовать как исполнимую цену сделки.</p>
+<p>Исходная строка: {{ data.source_start_row }}. Допустимых примеров: {{ data.examples }}.
+Исключено из-за неготовых/нечисловых входов: {{ data.excluded_examples }}.
+Строки не вырезаются из середины окна и не склеиваются.</p>
+<p>Разбиение без пересечения исходных окон: train {{ data.partition_sizes.train }},
+validation {{ data.partition_sizes.validation }}, оценка {{ data.partition_sizes.evaluation }}.
+Это разбиение данных, не подтверждение независимости уже просмотренной истории.</p>
+<form method="get"><label>Номер примера <input type="number" name="example" min="0"
+max="{{ data.examples - 1 }}" value="{{ data.index }}"></label><button>Показать</button></form>
+<div id="example-candles" style="height:400px"></div>
+<p>Граница справа от последнего известного бара. Зелёные/красные свечи слева — известная история;
+синие/оранжевые справа — реальные будущие цели, не доступные модели.
+Ночи и перерывы не заменяются выдуманными свечами.</p>
+</section>
+<section class="panel"><h2>Три будущие свечи — цель обучения</h2>
+<table><thead><tr><th>Время UTC</th><th>Open</th><th>High</th><th>Low</th><th>Close</th></tr></thead><tbody>
+{% for i in range(data.horizon) %}<tr><td>{{ data.target_times[i] }}</td>
+{% for price in data.target_ohlc[i] %}<td>{{ price }}</td>{% endfor %}</tr>{% endfor %}
+</tbody></table></section>
+<section class="panel"><h2>Известные входные признаки</h2>
+<p>{{ data.normalization }}. Будущие признаки в таблицу и на вход не входят.</p>
+<label>Признак <select id="feature-select">{% for name in data.feature_columns %}
+<option value="{{ loop.index0 }}">{{ name }}</option>{% endfor %}</select></label>
+<div id="feature-chart" style="height:300px"></div>
+<table><thead><tr><th>Поле</th><th>Определение</th><th>Последний известный бар</th></tr></thead><tbody>
+{% for name in data.feature_columns %}<tr><td>{{ name }}</td><td>{{ data.feature_definitions[name] }}</td>
+<td>{{ "%.7g"|format(data.input_features[-1][loop.index0]) }}</td></tr>{% endfor %}
+</tbody></table>
+<a class="button secondary" href="/api/training/{{ data.symbol }}/{{ data.timeframe }}/preview?example={{ data.index }}">Полный пример JSON</a>
+<a class="button secondary" href="/data/{{ data.symbol }}/{{ data.timeframe }}">Паспорт данных</a>
+</section>
+<script>
+const sample = {{ data|tojson }};
+function candles(rows, offset, name, colors) {
+  return {x: rows.map((_, i) => i + offset), open: rows.map(r => r[0]), high: rows.map(r => r[1]),
+    low: rows.map(r => r[2]), close: rows.map(r => r[3]), type: 'candlestick', name,
+    increasing: {line: {color: colors[0]}}, decreasing: {line: {color: colors[1]}}};
+}
+Plotly.newPlot('example-candles', [
+  candles(sample.context_ohlc, 0, 'Известные', ['#25a76f', '#df5e5e']),
+  candles(sample.target_ohlc, sample.context_size, 'Будущая цель', ['#3a8ee6', '#e49a32'])
+], {xaxis: {title: 'Последовательные торговые бары', rangeslider: {visible: false}},
+  shapes: [{type: 'line', x0: sample.context_size - .5, x1: sample.context_size - .5,
+    y0: 0, y1: 1, yref: 'paper', line: {dash: 'dash'}}]}, {responsive: true});
+function drawFeature() {
+  const i = Number(document.getElementById('feature-select').value);
+  const name = sample.feature_columns[i];
+  Plotly.react('feature-chart', [{x: sample.context_times,
+    y: sample.input_features.map(row => row[i]), mode: 'lines', name}],
+    {title: sample.feature_definitions[name]}, {responsive: true});
+}
+document.getElementById('feature-select').addEventListener('change', drawFeature);
+drawFeature();
+</script>
+{% endblock %}

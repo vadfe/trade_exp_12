@@ -6,6 +6,8 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from trade_exp_12.market_structure.causal import analyze_causal_smc
+
 os.environ.setdefault("SMC_CREDIT", "0")
 from smartmoneyconcepts import smc
 
@@ -21,6 +23,12 @@ class SMCAnalysis:
 
 
 def analyze_smc(
+    frame: pd.DataFrame, swing_length: int = 20, liquidity_range: float = 0.01
+) -> SMCAnalysis:
+    return SMCAnalysis(**analyze_causal_smc(frame, swing_length, liquidity_range))
+
+
+def analyze_smc_legacy(
     frame: pd.DataFrame, swing_length: int = 20, liquidity_range: float = 0.01
 ) -> SMCAnalysis:
     if swing_length < 2:

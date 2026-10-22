@@ -10,6 +10,81 @@
   </div>
   <div class="metric"><b>{{ "{:,}".format(record['row_count']) }}</b><span>свечей · {{ record['gap_count'] }} gaps</span></div>
 </section>
+<section class="panel">
+  <h2>Паспорт версии данных</h2>
+  {% if passport.verified %}
+  <p class="good">Базовые проверки файла, качества и времени пройдены.</p>
+  {% else %}
+  <p class="warn">Данные не подтверждены. Не используйте эту версию для нового обучения.</p>
+  <ul>{% for issue in passport.issues %}<li>{{ issue }}</li>{% endfor %}</ul>
+  {% endif %}
+  <dl>
+    <dt>Источник</dt><dd>{{ passport.source }}</dd>
+    <dt>Версия</dt><dd>{{ passport.version }}</dd>
+    <dt>Создана</dt><dd>{{ passport.created_at }}</dd>
+    <dt>Файл</dt><dd>{{ passport.path }}</dd>
+    <dt>SHA-256</dt><dd style="overflow-wrap:anywhere">{{ passport.checksum }}</dd>
+    <dt>Сумма совпадает с реестром</dt><dd>{{ 'Да' if passport.checksum_matches else 'Нет' }}</dd>
+    <dt>Время источника → хранение</dt><dd>{{ passport.source_timezone }} → UTC</dd>
+    <dt>Строки</dt><dd>{{ passport.rows }}</dd>
+    <dt>Первая / последняя свеча (UTC)</dt><dd>{{ passport.first_open_time }} / {{ passport.last_open_time }}</dd>
+    {% if passport.time_verified and passport.last_available_at is defined %}
+    <dt>Последняя свеча допущена не ранее (UTC)</dt><dd>{{ passport.last_available_at }}</dd>
+    <dt>Последняя загрузка (UTC)</dt><dd>{{ passport.last_downloaded_at }}</dd>
+    {% endif %}
+    <dt>Признаки соответствуют текущей исходной версии</dt><dd>{{ 'Да' if passport.processed_current else 'Нет — подготовьте признаки после обновления данных' }}</dd>
+  </dl>
+  <p>Для MOEX время переводится из московского в UTC. Свеча допускается после конца полного
+    интервала и указанного ISS конца, с консервативным запасом 15 минут на публикацию.
+    Это не обещание отсутствия последующих исправлений со стороны биржи.</p>
+  {% if passport.quality is defined %}
+  <p>Дубликаты: {{ passport.quality.duplicates }}; нарушения порядка: {{ passport.quality.out_of_order }};
+     ошибки OHLC: {{ passport.quality.invalid_ohlc }}; ошибки объёма: {{ passport.quality.invalid_volume }};
+     временные разрывы: {{ passport.quality.gaps }}.</p>
+  <details><summary>Первые 10 временных разрывов</summary><table>
+    <thead><tr><th>Предыдущий бар (UTC)</th><th>Следующий бар (UTC)</th></tr></thead>
+    <tbody>{% for gap in passport.quality.gap_details[:10] %}
+    <tr><td>{{ gap.previous_open_time }}</td><td>{{ gap.next_open_time }}</td></tr>
+    {% endfor %}</tbody></table></details>
+  {% endif %}
+  <h3>Сверка истории с MOEX</h3>
+  {% if symbol in config.moex.symbols and timeframe == '60' %}
+  <form method="post" action="/moex/audit">
+    <input type="hidden" name="symbol" value="{{ symbol }}">
+    <input type="hidden" name="timeframe" value="{{ timeframe }}">
+    <button {% if not passport.verified %}disabled{% endif %}>Проверить историю по MOEX</button>
+  </form>
+  {% endif %}
+  {% if passport.audit_error is defined %}<p class="warn">{{ passport.audit_error }}</p>{% endif %}
+  {% if passport.history_audit %}
+  {% set audit = passport.history_audit %}
+  <p>Проверено {{ audit.checked_at }}; версия {{ audit.raw_version }}.
+    Дат в дневном источнике: {{ audit.reference_days }};
+    отсутствующих торговых дат: {{ audit.missing_trading_dates|length }};
+    расхождений OHLC: {{ audit.ohlc_disagreements|length }};
+    внутридневных разрывов: {{ audit.intraday_gaps|length }}.</p>
+  <p class="{{ 'warn' if audit.status == 'needs_review' else 'good' }}">
+    {{ 'Нужен разбор отмеченных участков, автоматического допуска всей истории нет.' if audit.status == 'needs_review' else 'Сверка дат и OHLC пройдена в пределах покрытия дневного источника.' }}</p>
+  {% if audit.missing_trading_dates %}<p>Нет дат: {{ audit.missing_trading_dates|join(', ') }}</p>{% endif %}
+  <table><thead><tr><th>Внутридневной разрыв (UTC)</th><th>Сообщения биржи</th></tr></thead><tbody>
+    {% for gap in audit.intraday_gaps %}<tr><td>{{ gap.start }} — {{ gap.end }}</td><td>
+      {% for source in gap.halt_sources %}<a href="{{ source }}" rel="noreferrer">Сообщение MOEX / источника</a> {% else %}Причина не подтверждена{% endfor %}
+    </td></tr>{% endfor %}
+  </tbody></table>
+  <details><summary>Расхождения дневных и часовых OHLC</summary>
+    {% for row in audit.ohlc_disagreements %}<p>{{ row.date }}: часовые {{ row.hourly }}; дневной источник {{ row.daily }}</p>{% endfor %}
+  </details>
+  <p>Граничные даты без полного сравнения: {{ audit.boundary_dates_not_compared|join(', ') }}.</p>
+  <ul>{% for limitation in audit.limitations %}<li>{{ limitation }}</li>{% endfor %}</ul>
+  {% else %}<p class="warn">Сверка полной истории с дневным источником ещё не выполнена.</p>{% endif %}
+  <p class="muted">Без биржевого календаря нельзя автоматически отличить все закрытия сессии
+    от потерь данных. Дивиденды, сплиты и полнота истории остановок торгов ещё не подтверждены.
+    Паспорт не подтверждает причинность признаков или качество модели.</p>
+  <a class="button secondary" href="/api/data/{{ symbol }}/{{ timeframe }}/passport">Паспорт JSON</a>
+  {% if passport.verified and passport.processed_current and timeframe == '60' %}
+  <a class="button" href="/training/{{ symbol }}/{{ timeframe }}">Обучающий пример: 61 → 3 OHLC</a>
+  {% endif %}
+</section>
 <section class="panel chart-panel">
   <div class="chart-toolbar">
     <span id="chart-status">Загрузка обзора…</span>
@@ -29,9 +104,9 @@
       <form class="inline" method="post" action="/data/process">
         <input type="hidden" name="symbol" value="{{ symbol }}">
         <input type="hidden" name="timeframe" value="{{ timeframe }}">
-        <button>{{ 'Пересчитать признаки' if processed else 'Подготовить признаки' }}</button>
+        <button {% if symbol in config.moex.symbols and not passport.verified %}disabled{% endif %}>{{ 'Пересчитать признаки' if processed else 'Подготовить признаки' }}</button>
       </form>
-      <form class="inline" method="post" action="/data/download">
+      <form class="inline" method="post" action="{{ '/moex/download' if symbol in config.moex.symbols else '/data/download' }}">
         <input type="hidden" name="symbol" value="{{ symbol }}">
         <input type="hidden" name="timeframe" value="{{ timeframe }}">
         <button>Обновить данные</button>

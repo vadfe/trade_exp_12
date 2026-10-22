@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Прямой прогноз OHLC{% endblock %}
+{% block content %}
+<section class="hero"><div><span class="eyebrow">Этап 3 · прогноз будущих свечей</span>
+<h1>61 известный бар → 3 будущие OHLC-свечи</h1>
+<p>Вход: 33 признака известной истории. Обучение: ошибка будущих open/high/low/close,
+а не восстановление показателей. Первый инструмент — SBER, 60 минут.</p></div></section>
+<section class="panel"><h2>Порядок работы</h2>
+<ol><li><a href="/data/SBER/60">Открыть паспорт SBER</a>, обновить исходные данные и разобрать сверку истории.</li>
+<li>Подготовить признаки relative_smc_v3. Проверить <a href="/training/SBER/60">обучающий пример 61 → 3</a>.</li>
+<li>Запустить один разработочный опыт. Обучение, проверка и отчёт выполняются одной задачей.</li></ol>
+<p class="warn">Результат на просмотренной истории — разработочная оценка, не подтверждённый сигнал.
+Критерии перехода к сигналам пока не согласованы. Комиссии и исполнение здесь не оцениваются.</p>
+<form method="post" action="/ohlc/train">
+<input type="hidden" name="symbol" value="SBER"><input type="hidden" name="timeframe" value="60">
+<label>Эпохи <input type="number" name="epochs" value="50" min="1" max="50"></label>
+<label><input type="checkbox" name="acknowledge_development" value="true" required>
+Ознакомился с паспортом и открытыми ограничениями: это разработочная проверка, не торговая рекомендация</label>
+<button>Обучить и проверить OHLC-модель SBER</button></form>
+<p>Фиксировано: контекст 61, горизонт 3, seed 42; без автоматического перебора конфигураций.
+Scaler и масштаб цели определяются только на train. Checkpoint выбирается по ошибке OHLC на validation.</p>
+</section>
+<section class="panel"><h2>Готовые OHLC-отчёты</h2>
+{% if runs %}<table><thead><tr><th>Запуск</th><th>Инструмент</th><th>Ошибка модели</th><th>Цена не меняется</th><th>Повтор свечи</th></tr></thead><tbody>
+{% for run in runs %}<tr><td><a href="/ohlc/{{ run.run_id }}">{{ run.run_id }}</a></td>
+<td>{{ run.metadata.symbol }} / {{ run.metadata.timeframe }}</td>
+<td>{{ "%.4f"|format(run.metrics.model) }}%</td><td>{{ "%.4f"|format(run.metrics.flat) }}%</td>
+<td>{{ "%.4f"|format(run.metrics.repeat) }}%</td></tr>{% endfor %}</tbody></table>
+{% else %}<p>Отчётов новой OHLC-модели пока нет. Архивные MAE-модели здесь не отображаются.</p>{% endif %}
+</section>
+{% endblock %}

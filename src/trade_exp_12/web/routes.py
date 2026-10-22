@@ -96,6 +96,24 @@ async def start_moex_download(
     return RedirectResponse(f"/jobs/{job_id}", status_code=303)
 
 
+@router.post("/moex/audit")
+async def start_moex_audit(
+    request: Request, symbol: str = Form(...), timeframe: str = Form(...)
+):
+    settings = request.app.state.config.settings
+    if symbol not in settings.moex.symbols or timeframe != "60":
+        raise HTTPException(status_code=400, detail="Сверка доступна для часовых акций MOEX")
+    service = request.app.state.data_service
+    if service.latest_record(symbol, timeframe) is None:
+        raise HTTPException(status_code=404, detail="Сначала загрузите исходные свечи")
+    passport = service.dataset_passport(symbol, timeframe)
+    if not passport["verified"]:
+        raise HTTPException(status_code=409, detail="; ".join(passport["issues"]))
+    job_id = request.app.state.registry.create_job("audit_moex", symbol, timeframe)
+    asyncio.create_task(service.audit_moex(job_id, symbol, timeframe))
+    return RedirectResponse(f"/jobs/{job_id}", status_code=303)
+
+
 @router.post("/data/process")
 async def start_processing(
     request: Request, symbol: str = Form(...), timeframe: str = Form(...)
@@ -167,10 +185,39 @@ def dataset(request: Request, symbol: str, timeframe: str):
             request,
             record=record,
             processed=processed,
+            passport=request.app.state.data_service.dataset_passport(symbol, timeframe),
             symbol=symbol,
             timeframe=timeframe,
         ),
     )
+
+
+@router.get("/api/data/{symbol}/{timeframe}/passport")
+def dataset_passport(request: Request, symbol: str, timeframe: str):
+    if request.app.state.data_service.latest_record(symbol, timeframe) is None:
+        raise HTTPException(status_code=404, detail="Набор данных не найден")
+    return request.app.state.data_service.dataset_passport(symbol, timeframe)
+
+
+def _ohlc_preview(request: Request, symbol: str, timeframe: str, example: int) -> dict:
+    if symbol not in request.app.state.config.settings.moex.symbols or timeframe != "60":
+        raise HTTPException(status_code=400, detail="Нужна часовая акция MOEX")
+    try:
+        return request.app.state.data_service.ohlc_training_preview(symbol, timeframe, example)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/api/training/{symbol}/{timeframe}/preview")
+def ohlc_preview_data(request: Request, symbol: str, timeframe: str, example: int = 0):
+    return _ohlc_preview(request, symbol, timeframe, example)
+
+
+@router.get("/training/{symbol}/{timeframe}")
+def ohlc_preview_page(request: Request, symbol: str, timeframe: str, example: int = 0):
+    data = _ohlc_preview(request, symbol, timeframe, example)
+    return templates.TemplateResponse(
+        request, "training_preview.html", context(request, data=data))
 
 
 @router.get("/api/features/{symbol}/{timeframe}")
@@ -617,6 +664,118 @@ def predictions_page(
 # --- v2: MAE Pretrain / Finetune routes ---
 
 
+def _ohlc_root(request: Request) -> Path:
+    return request.app.state.config.root / "data" / "ohlc_forecasts"
+
+
+def _load_ohlc_report(request: Request, run_id: str) -> tuple[Path, dict]:
+    if not run_id.isalnum():
+        raise HTTPException(status_code=400, detail="Некорректный номер запуска")
+    path = _ohlc_root(request) / run_id / "report.json"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="OHLC-отчёт пока не создан")
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+        if (not isinstance(report, dict) or report.get("schema_version") != 3
+                or report.get("model_type") != "ohlc_forecast"):
+            raise ValueError("Несовместимая версия OHLC-отчёта")
+        required = {"metadata", "metrics", "examples", "architecture", "split", "limitations",
+                    "seed", "best_validation_mae_pct"}
+        if not required.issubset(report) or not report["examples"]:
+            raise ValueError("Неполный OHLC-отчёт")
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return path, report
+
+
+@router.get("/ohlc")
+def ohlc_page(request: Request, job_id: int | None = None):
+    runs = []
+    root = _ohlc_root(request)
+    if root.is_dir():
+        for run in sorted(root.iterdir(), reverse=True):
+            if not (run / "report.json").is_file():
+                continue
+            try:
+                _, report = _load_ohlc_report(request, run.name)
+            except HTTPException:
+                continue
+            if job_id is not None and report["metadata"].get("job_id") == job_id:
+                return RedirectResponse(f"/ohlc/{run.name}", status_code=303)
+            runs.append({"run_id": run.name, "metadata": report["metadata"],
+                         "metrics": report["metrics"]["overall"]})
+    return templates.TemplateResponse(
+        request, "ohlc.html", context(request, runs=runs))
+
+
+@router.post("/ohlc/train")
+async def start_ohlc_training(
+    request: Request, symbol: str = Form("SBER"), timeframe: str = Form("60"),
+    epochs: int = Form(50), acknowledge_development: bool = Form(False),
+):
+    if symbol != "SBER" or timeframe != "60" or not 1 <= epochs <= 50:
+        raise HTTPException(status_code=400, detail="Первый опыт: SBER/60, от 1 до 50 эпох")
+    if not acknowledge_development:
+        raise HTTPException(status_code=400, detail="Подтвердите разработочный характер проверки")
+    preview = _ohlc_preview(request, symbol, timeframe, 0)
+    passport = request.app.state.data_service.dataset_passport(symbol, timeframe)
+    audit = passport["history_audit"]
+    if audit is None:
+        raise HTTPException(status_code=409, detail="Сначала выполните сверку истории по MOEX")
+    if audit["missing_trading_dates"] or audit["unreferenced_intraday_gaps"]:
+        raise HTTPException(
+            status_code=409, detail="Сначала разберите необъяснённые пропуски истории")
+    if any(not value for value in preview["partition_sizes"].values()):
+        raise HTTPException(status_code=409, detail="Недостаточно истории для трёх частей")
+    registry = request.app.state.registry
+    record = registry.latest_processed(symbol, timeframe)
+    if record["version"] != preview["processed_version"]:
+        raise HTTPException(status_code=409, detail="Версия признаков изменилась; повторите запуск")
+    from datetime import UTC as _UTC
+    stamp = datetime.now(_UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    output = _ohlc_root(request) / stamp
+    path = request.app.state.data_service._resolve_path(record["path"])
+    job_id = registry.create_job("ohlc_forecast", symbol, timeframe)
+    command = [
+        sys.executable, "-m", "trade_exp_12.model.run_ohlc_forecast",
+        "--parquet", str(path), "--output-dir", str(output),
+        "--symbol", symbol, "--timeframe", timeframe,
+        "--raw-version", preview["raw_version"],
+        "--processed-version", preview["processed_version"],
+        "--expected-checksum", preview["processed_checksum"],
+        "--data-audit", json.dumps({
+            "raw_checksum": audit["raw_checksum"], "checked_at": audit["checked_at"],
+            "status": audit["status"],
+            "ohlc_disagreement_dates": [row["date"] for row in audit["ohlc_disagreements"]],
+            "intraday_gaps": audit["intraday_gaps"], "limitations": audit["limitations"],
+        }),
+        "--epochs", str(epochs), "--db", str(registry.path), "--job-id", str(job_id),
+    ]
+    try:
+        subprocess.Popen(command, cwd=str(request.app.state.config.root),
+                         env={**__import__("os").environ, "SMC_CREDIT": "0"})
+    except OSError as exc:
+        registry.update_job(job_id, "failed", 1, str(exc))
+        raise HTTPException(status_code=500, detail="Не удалось запустить обучение") from exc
+    return RedirectResponse(f"/jobs/{job_id}", status_code=303)
+
+
+@router.get("/ohlc/{run_id}")
+def ohlc_report_page(request: Request, run_id: str, example: int = 0):
+    _, report = _load_ohlc_report(request, run_id)
+    if not 0 <= example < len(report["examples"]):
+        raise HTTPException(status_code=400, detail="Нет примера с таким номером")
+    return templates.TemplateResponse(
+        request, "ohlc_report.html", context(request, run_id=run_id, report=report,
+                                            example=example, sample=report["examples"][example]))
+
+
+@router.get("/ohlc/{run_id}/report.json")
+def ohlc_report_download(request: Request, run_id: str):
+    path, _ = _load_ohlc_report(request, run_id)
+    return FileResponse(path, media_type="application/json", filename=f"ohlc_{run_id}.json")
+
+
 def _pretrain_dir(request: Request) -> Path:
     return request.app.state.config.root / "data" / "pretrain"
 
@@ -773,6 +932,14 @@ async def start_pretrain(
 
     if not parquet_paths:
         raise HTTPException(status_code=404, detail="No processed datasets found")
+    if registry.latest_dataset(only_symbol, settings.moex.timeframes[0]) is None:
+        raise HTTPException(status_code=409, detail="Сначала загрузите исходные свечи MOEX")
+    passport = request.app.state.data_service.dataset_passport(
+        only_symbol, settings.moex.timeframes[0])
+    if not passport["verified"] or not passport["processed_current"]:
+        raise HTTPException(
+            status_code=409,
+            detail="Сначала обновите исходные данные MOEX и подготовьте признаки текущей версии")
 
     from datetime import UTC as _UTC
     stamp = datetime.now(_UTC).strftime("%Y%m%dT%H%M%S")

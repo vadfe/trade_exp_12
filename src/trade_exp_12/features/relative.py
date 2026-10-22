@@ -3,6 +3,31 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+RELATIVE_FEATURE_DEFINITIONS = {
+    "log_return": "Логарифм отношения close к предыдущему close.",
+    "body_atr": "Тело (close − open), делённое на текущий известный ATR14.",
+    "upper_wick_atr": "Верхняя тень, делённая на ATR14.",
+    "lower_wick_atr": "Нижняя тень, делённая на ATR14.",
+    "range_atr": "Диапазон (high − low), делённый на ATR14.",
+    "relative_volume": "Объём / медиана объёмов предыдущих 20 завершённых баров.",
+    "volume_spike_10": "Объём / средний объём предыдущих 10 завершённых баров.",
+    "trend_slope_10": "Линейный наклон close за 10 баров, делённый на ATR14.",
+    "trend_slope_30": "Линейный наклон close за 30 баров, делённый на ATR14.",
+    "position_in_range_20": "Положение close между min low и max high последних 20 баров.",
+    "atr_ratio": "Отношение ATR7 к ATR30.",
+    "roc_5": "Относительное изменение close за 5 баров.",
+    "roc_15": "Относительное изменение close за 15 баров.",
+    "consecutive_direction": "Длина текущей серии направлений тел свечей, со знаком.",
+    "avg_body_atr_5": "Среднее body_atr за 5 баров.",
+    "avg_upper_wick_5": "Средняя верхняя тень в ATR за 5 баров.",
+    "avg_lower_wick_5": "Средняя нижняя тень в ATR за 5 баров.",
+    "avg_range_5": "Средний диапазон в ATR за 5 баров.",
+    "body_deceleration": "Модуль body_atr / средний модуль body_atr за 5 баров.",
+    "wick_ratio": "Верхняя тень / сумма верхней и нижней теней.",
+    "avg_return_5": "Средняя лог-доходность за 5 баров.",
+    "avg_return_10": "Средняя лог-доходность за 10 баров.",
+}
+
 
 def _rolling_slope(series: pd.Series, window: int) -> pd.Series:
     """Vectorised rolling linear regression slope (fast, no scipy.apply)."""

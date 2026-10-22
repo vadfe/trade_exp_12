@@ -209,3 +209,46 @@ class MarketMAE(nn.Module):
     def embedding(self, x: torch.Tensor) -> torch.Tensor:
         """Extract CLS embedding (for compatibility with v1)."""
         return self.encode(x)
+
+
+class MarketOHLCForecaster(nn.Module):
+    def __init__(self, n_features: int = 33, context_size: int = 61, horizon: int = 3,
+                 d_model: int = 64, n_heads: int = 4, layers: int = 4, d_ff: int = 256,
+                 dropout: float = 0.1, target_scale: float = 0.01):
+        super().__init__()
+        if context_size < 1 or horizon < 1 or not math.isfinite(target_scale) or target_scale <= 0:
+            raise ValueError("Некорректные параметры OHLC-модели")
+        self.context_size, self.horizon, self.n_features = context_size, horizon, n_features
+        self.register_buffer("target_scale", torch.tensor(target_scale, dtype=torch.float32))
+        self.patch_embed = PatchEmbedding(n_features, d_model)
+        self.pos_enc = SinusoidalPositionalEncoding(d_model, context_size)
+        self.encoder = nn.TransformerEncoder(nn.TransformerEncoderLayer(
+            d_model=d_model, nhead=n_heads, dim_feedforward=d_ff, dropout=dropout,
+            batch_first=True, norm_first=True), num_layers=layers)
+        self.norm = nn.LayerNorm(d_model)
+        self.ohlc_head = nn.Linear(d_model, horizon * 4)
+        nn.init.normal_(self.ohlc_head.weight, std=0.001)
+        nn.init.zeros_(self.ohlc_head.bias)
+
+    def forward(self, known_features: torch.Tensor, anchor_close: torch.Tensor) -> torch.Tensor:
+        if known_features.ndim != 3 or known_features.shape[1:] != (
+                self.context_size, self.n_features):
+            raise ValueError("OHLC-модель принимает только известный контекст заданного размера")
+        if (anchor_close.numel() != known_features.shape[0]
+                or not torch.isfinite(anchor_close).all() or (anchor_close <= 0).any()):
+            raise ValueError("Невалидная последняя известная цена")
+        if not torch.isfinite(known_features).all():
+            raise ValueError("Нечисловые входы модели")
+        encoded = self.encoder(self.pos_enc(self.patch_embed(known_features)))
+        parameters = self.ohlc_head(self.norm(encoded[:, -1])).reshape(-1, self.horizon, 4)
+        open_log, close_log = parameters[..., 0], parameters[..., 1]
+        upper = torch.nn.functional.softplus(parameters[..., 2])
+        lower = torch.nn.functional.softplus(parameters[..., 3])
+        logs = torch.stack([
+            open_log, torch.maximum(open_log, close_log) + upper,
+            torch.minimum(open_log, close_log) - lower, close_log,
+        ], dim=-1) * self.target_scale
+        prices = torch.exp(logs) * anchor_close.to(logs.dtype).reshape(-1, 1, 1)
+        if not torch.isfinite(prices).all() or (prices <= 0).any():
+            raise ValueError("OHLC-модель выдала недопустимые цены")
+        return prices

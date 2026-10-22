@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}OHLC {{ report.metadata.symbol }} · {{ run_id }}{% endblock %}
+{% block head %}<script src="/vendor/plotly.min.js?v=6.3.0"></script>{% endblock %}
+{% block content %}
+<section class="hero"><div><span class="eyebrow">Разработочная проверка прямого OHLC-прогноза</span>
+<h1>{{ report.metadata.symbol }} · {{ run_id }}</h1>
+<p>{{ report.architecture.context_size }} известных баров × {{ report.architecture.n_features }} признака
+→ {{ report.architecture.horizon }} будущие свечи OHLC. Проверено {{ report.evaluation_windows }} непересекающихся целевых хвостов.</p>
+</div></section>
+<section class="panel"><h2>Результат</h2>
+<p>Ошибка — среднее абсолютное отклонение цен в процентах от последнего известного close. Меньше — лучше.</p>
+<table><thead><tr><th>Что проверяем</th><th>Модель</th><th>Цена не меняется</th><th>Последняя свеча повторяется</th></tr></thead><tbody>
+<tr><td>Все 12 будущих цен</td><td>{{ "%.4f"|format(report.metrics.overall.model) }}%</td>
+<td>{{ "%.4f"|format(report.metrics.overall.flat) }}%</td><td>{{ "%.4f"|format(report.metrics.overall.repeat) }}%</td></tr>
+<tr><td>Отдельно закрытия</td><td>{{ "%.4f"|format(report.metrics.overall.model_close) }}%</td>
+<td>{{ "%.4f"|format(report.metrics.overall.flat_close) }}%</td><td>{{ "%.4f"|format(report.metrics.overall.repeat_close) }}%</td></tr>
+</tbody></table>
+{% if report.metrics.overall.improvement_vs_best_pct is not none %}
+<p>Уменьшение общей ошибки против лучшей простой базы: {{ "%.2f"|format(report.metrics.overall.improvement_vs_best_pct) }}%.
+Отрицательное значение означает, что модель хуже.</p>{% endif %}
+<p class="warn">Автоматического перехода к сигналам нет.</p>
+<ul>{% for limitation in report.limitations %}<li>{{ limitation }}</li>{% endfor %}</ul>
+</section>
+<section class="panel"><h2>Ошибка по будущим барам</h2>
+<table><thead><tr><th>Бар</th><th>Все OHLC: модель</th><th>Неподвижная цена</th><th>Повтор свечи</th><th>Close: модель</th><th>Close: база</th></tr></thead><tbody>
+{% for row in report.metrics.per_horizon %}<tr><td>+{{ row.horizon }}</td>
+<td>{{ "%.4f"|format(row.model) }}%</td><td>{{ "%.4f"|format(row.flat) }}%</td><td>{{ "%.4f"|format(row.repeat) }}%</td>
+<td>{{ "%.4f"|format(row.model_close) }}%</td><td>{{ "%.4f"|format(row.flat_close) }}%</td></tr>{% endfor %}
+</tbody></table>
+<h3>Ошибка по компонентам свечи</h3><table><thead><tr><th>Цена</th><th>Модель</th><th>Неподвижная цена</th><th>Повтор свечи</th></tr></thead><tbody>
+{% for row in report.metrics.per_component %}<tr><td>{{ row.component }}</td><td>{{ "%.4f"|format(row.model) }}%</td>
+<td>{{ "%.4f"|format(row.flat) }}%</td><td>{{ "%.4f"|format(row.repeat) }}%</td></tr>{% endfor %}</tbody></table>
+</section>
+<section class="panel"><h2>Любой проверенный пример</h2>
+<form method="get"><label>Номер <input type="number" name="example" min="0"
+max="{{ report.examples|length - 1 }}" value="{{ example }}"></label><button>Показать</button></form>
+<p>Последнее известное закрытие: {{ sample.anchor_close }}, бар открыт {{ sample.anchor_time }}.
+Контекст допущен не ранее {{ sample.context_available_at or 'не указано' }} UTC.
+Пример {{ example }} не выбирался по удачности результата.</p>
+<div id="ohlc-chart" style="height:400px"></div>
+<table><thead><tr><th>Время UTC</th><th>Реальные O/H/L/C</th><th>Прогноз O/H/L/C</th></tr></thead><tbody>
+{% for i in range(report.architecture.horizon) %}<tr><td>{{ sample.times[i] }}</td>
+<td>{{ sample.actual[i] }}</td><td>{{ sample.predicted[i] }}</td></tr>{% endfor %}</tbody></table>
+</section>
+<section class="panel"><h2>Воспроизводимость</h2>
+{% if report.metadata.data_audit is defined %}
+<p>Сверка исходной истории: {{ report.metadata.data_audit.checked_at }};
+расхождения дневных/часовых OHLC: {{ report.metadata.data_audit.ohlc_disagreement_dates|join(', ') }}.</p>
+<ul>{% for limitation in report.metadata.data_audit.limitations %}<li>{{ limitation }}</li>{% endfor %}</ul>
+{% endif %}
+<p>Raw: {{ report.metadata.raw_version }}. Признаки: {{ report.metadata.processed_version }}, {{ report.metadata.feature_set }}.
+Seed {{ report.seed }}. Лучшая ошибка validation: {{ "%.4f"|format(report.best_validation_mae_pct) }}%.</p>
+<p style="overflow-wrap:anywhere">SHA-256 признаков: {{ report.metadata.processed_checksum }}.</p>
+<table><thead><tr><th>Часть</th><th>Первый контекст</th><th>Последняя цель</th><th>Примеров</th></tr></thead><tbody>
+{% for name, part in report.split.items() %}<tr><td>{{ name }}</td><td>{{ part.first_time }}</td><td>{{ part.last_time }}</td><td>{{ part.examples }}</td></tr>{% endfor %}</tbody></table>
+<a class="button" href="/ohlc/{{ run_id }}/report.json">Скачать полный JSON</a>
+<a class="button secondary" href="/ohlc">К OHLC-моделям</a>
+</section>
+<script>
+const sample = {{ sample|tojson }};
+function trace(rows, shift, name, colors) {
+  return {x: rows.map((_, i) => i + 1 + shift), open: rows.map(r => r[0]), high: rows.map(r => r[1]),
+    low: rows.map(r => r[2]), close: rows.map(r => r[3]), type: 'candlestick', name,
+    increasing: {line: {color: colors[0]}}, decreasing: {line: {color: colors[1]}}};
+}
+Plotly.newPlot('ohlc-chart', [trace(sample.actual, -.15, 'Реальность', ['#25a76f','#df5e5e']),
+  trace(sample.predicted, .15, 'Прогноз', ['#3a8ee6','#e49a32'])],
+  {xaxis: {tickvals: [1,2,3], ticktext: sample.times, rangeslider: {visible: false}},
+   yaxis: {title: 'Цена'}, shapes: [{type: 'line', x0: .5, x1: 3.5,
+     y0: sample.anchor_close, y1: sample.anchor_close, line: {dash: 'dot'}}]}, {responsive: true});
+</script>
+{% endblock %}
